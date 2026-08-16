@@ -2,11 +2,234 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <title>Hello World!</title>
-
+    <title>Puck</title>
   </head>
   <body>
-    <h1>💖 Hello World!</h1>
-    <p>Welcome to your Electron application.</p>
+    <aside class="sidebar">
+      <div class="sidebar-drag"></div>
+      <div class="brand">
+        <span class="logo">P</span>
+        <span class="brand-name">puck</span>
+        <span class="beta">BETA</span>
+      </div>
+
+      <div class="recents">
+        <div class="recents-head">
+          <p class="recents-label">Agents</p>
+          <button class="icon-btn small" id="add-agent" type="button" aria-label="New agent">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14" /><path d="M5 12h14" /></svg>
+          </button>
+        </div>
+        <ul class="recents-list" id="recents"></ul>
+      </div>
+
+      <div class="sidebar-footer">
+        <span class="avatar">F</span>
+        <span class="user">
+          <span class="user-name">Feynman</span>
+          <span class="user-org">Puck</span>
+        </span>
+        <button class="icon-btn" id="open-settings" type="button" aria-label="Settings">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.98 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.98a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.01A1.7 1.7 0 0 0 10 3.09V3a2 2 0 1 1 4 0v.09c0 .68.4 1.3 1.03 1.56a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.01c.26.62.88 1.03 1.56 1.03H21a2 2 0 1 1 0 4h-.09c-.68 0-1.3.4-1.56 1.03Z" /></svg>
+        </button>
+      </div>
+    </aside>
+
+    <section class="main">
+      <div class="main-drag"></div>
+
+      <div class="env-view hidden" id="settings-view">
+        <div class="env-page">
+          <button class="back-link" id="settings-back" type="button">
+            <svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" /></svg>
+            Back to chat
+          </button>
+          <h2 class="page-title">Settings</h2>
+          <nav class="tabs" id="settings-tabs">
+            <button class="tab active" data-tab="agents" type="button">Agents</button>
+            <button class="tab" data-tab="providers" type="button">Providers</button>
+            <button class="tab" data-tab="envs" type="button">Environments</button>
+          </nav>
+
+          <div class="settings-section" id="sec-agents">
+            <p class="page-sub">
+              Named provider configurations — model, system instructions, thinking level, and
+              advanced options. Pick an agent per chat session.
+            </p>
+            <div class="form-msg" id="agent-msg"></div>
+            <div class="cards" id="agent-cards"></div>
+          </div>
+
+          <div class="settings-section hidden" id="sec-providers">
+            <p class="page-sub">
+              Sign in once per provider — tokens are stored encrypted and injected into every
+              environment. Logins open in their own window.
+            </p>
+            <div class="form-msg" id="provider-msg"></div>
+            <div class="cards" id="provider-cards"></div>
+          </div>
+
+          <div class="settings-section hidden" id="sec-envs">
+            <p class="page-sub">
+              Docker containers the harness runs in, with your workspace mounted at
+              <code>/workspace</code>. Click a card to configure it.
+            </p>
+            <div class="form-msg" id="env-msg"></div>
+            <div class="cards" id="env-cards"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="env-view hidden" id="env-detail-view">
+        <div class="env-page">
+          <button class="back-link" id="detail-back" type="button">
+            <svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" /></svg>
+            Settings
+          </button>
+          <div class="page-head">
+            <div class="detail-title-wrap">
+              <h2 class="page-title" id="detail-title">environment</h2>
+              <span id="detail-status"></span>
+            </div>
+            <div class="row-actions" id="detail-controls"></div>
+          </div>
+          <div class="form-msg" id="detail-msg"></div>
+          <div class="config-form">
+            <div class="detail-grid">
+              <label>Name <input id="d-name" /></label>
+              <label>Base image <input id="d-image" /></label>
+              <label>Workspace path <input id="d-workspace" /></label>
+              <label class="check">
+                <input type="checkbox" id="d-autoinstall" /> Install provider CLIs &amp; SDKs on start
+              </label>
+            </div>
+            <div class="editor-sec">
+              <h4>Dockerfile <span class="hint-inline">optional — overrides base image on rebuild</span></h4>
+              <textarea id="d-dockerfile" rows="6" spellcheck="false"
+                placeholder="FROM node:22-bookworm&#10;RUN apt-get update &amp;&amp; apt-get install -y ripgrep jq"></textarea>
+            </div>
+            <div class="editor-sec">
+              <h4>Environment variables</h4>
+              <div class="kv-list" id="d-envvars"></div>
+              <div class="kv-add">
+                <input id="d-env-key" placeholder="KEY" />
+                <input id="d-env-val" placeholder="value" />
+                <button class="btn-ghost" id="d-env-add" type="button">Add</button>
+              </div>
+            </div>
+            <div class="editor-sec">
+              <h4>Secrets <span class="hint-inline">encrypted at rest · injected as env vars</span></h4>
+              <div class="kv-list" id="d-secrets"></div>
+              <div class="kv-add">
+                <input id="d-secret-key" placeholder="KEY" />
+                <input id="d-secret-val" placeholder="value" type="password" />
+                <button class="btn-ghost" id="d-secret-add" type="button">Add</button>
+              </div>
+            </div>
+            <div class="editor-sec detail-actions">
+              <button class="btn-primary" id="d-save" type="button">Save changes</button>
+              <span class="hint-inline">Config changes apply when the container is rebuilt</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="env-view hidden" id="agent-detail-view">
+        <div class="env-page">
+          <button class="back-link" id="agent-back" type="button">
+            <svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" /></svg>
+            Settings
+          </button>
+          <div class="page-head">
+            <div class="detail-title-wrap">
+              <h2 class="page-title" id="agent-title">agent</h2>
+              <span id="agent-status"></span>
+            </div>
+            <div class="row-actions" id="agent-controls"></div>
+          </div>
+          <div class="form-msg" id="agent-detail-msg"></div>
+          <div class="config-form">
+            <div class="detail-grid">
+              <label>Name <input id="a-name" /></label>
+              <label>Provider
+                <select id="a-provider"></select>
+              </label>
+              <label>Model <input id="a-model" list="a-model-options" /></label>
+              <datalist id="a-model-options"></datalist>
+              <label>Thinking level
+                <select id="a-thinking"></select>
+              </label>
+            </div>
+            <div class="editor-sec">
+              <h4>System instructions
+                <span class="hint-inline" id="a-system-hint">appended to the harness system prompt</span>
+              </h4>
+              <textarea id="a-system" rows="5" spellcheck="false"
+                placeholder="You are a careful reviewer. Always run the tests before claiming success."></textarea>
+            </div>
+            <div class="editor-sec">
+              <h4>Advanced options
+                <span class="hint-inline">JSON merged into the provider API options — full surface passthrough</span>
+              </h4>
+              <textarea id="a-advanced" rows="4" spellcheck="false"
+                placeholder='{ "maxTurns": 30 }'></textarea>
+            </div>
+            <div class="editor-sec detail-actions">
+              <button class="btn-primary" id="a-save" type="button">Save changes</button>
+              <span class="hint-inline">Applies from the next message</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="stage empty" id="stage">
+        <div class="stage-main">
+        <header class="chat-head" id="chat-head">
+          <span class="chat-head-name" id="chat-head-name"></span>
+          <span class="card-tag" id="chat-head-tag"></span>
+        </header>
+
+        <div class="turn-full" id="turn-full">
+          <div class="turn-full-head">
+            <button class="back-link" id="turn-full-back" type="button">
+              <svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" /></svg>
+              <span id="turn-full-crumb">Chat</span>
+            </button>
+            <span class="crumb-sep">/</span>
+            <span class="turn-full-title" id="turn-full-title"></span>
+          </div>
+          <div class="turn-full-body" id="turn-full-body"></div>
+        </div>
+
+        <div class="chat" id="chat"></div>
+
+        <div class="hero" id="hero">
+          <span class="hero-avatar" id="hero-avatar">P</span>
+          <h1 class="hero-title" id="hero-title">Welcome to Puck</h1>
+          <p class="hero-subtitle" id="hero-subtitle">
+            Configure a Docker environment, then chat with Claude Code or Codex.
+          </p>
+          <button class="btn-primary hero-cta" id="hero-cta" type="button">Open settings</button>
+        </div>
+
+        <div class="composer-zone">
+          <form class="composer" id="composer">
+            <textarea id="prompt" rows="1" placeholder="Ask anything" autofocus></textarea>
+            <div class="composer-tools">
+              <button class="picker sel" id="envsel-btn" type="button">
+                <span class="dot-mini" id="envsel-dot"></span>
+                <span id="envsel-name">no environment</span>
+                <svg class="chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
+              </button>
+              <span class="spacer"></span>
+              <button class="send" id="send" type="submit" aria-label="Send">
+                <svg viewBox="0 0 24 24"><path d="M12 19V5" /><path d="m5 12 7-7 7 7" /></svg>
+              </button>
+            </div>
+          </form>
+        </div>
+        </div>
+      </div>
+    </section>
   </body>
 </html>
