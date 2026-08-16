@@ -1,4 +1,5 @@
 {
+  "root": true,
   "env": {
     "browser": true,
     "es6": true,
@@ -12,5 +13,9 @@
     "plugin:import/electron",
     "plugin:import/typescript"
   ],
-  "parser": "@typescript-eslint/parser"
+  "parser": "@typescript-eslint/parser",
+  "ignorePatterns": [".webpack/", "out/", "dist/", "coverage/", "src/main/runner/runner.js"],
+  "settings": {
+    "import/core-modules": ["raw-runner"]
+  }
 }

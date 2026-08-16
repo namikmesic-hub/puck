@@ -1,3 +1,4 @@
+import * as path from 'node:path';
 import type { Configuration } from 'webpack';
 
 import { rules } from './webpack.rules';
@@ -16,5 +17,9 @@ export const mainConfig: Configuration = {
   plugins,
   resolve: {
     extensions: ['.js', '.ts', '.jsx', '.tsx', '.css', '.json'],
+    alias: {
+      // The container runner, imported as a raw string (asset/source rule).
+      'raw-runner': path.resolve(__dirname, 'src/main/runner/runner.js'),
+    },
   },
 };

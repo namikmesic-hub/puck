@@ -77,7 +77,7 @@ function ensure(envId: string): RunnerProc {
     if (runners.get(envId) === proc) runners.delete(envId);
   };
   child.on('error', fail);
-  child.stdin.on('error', fail);
+  child.stdin?.on('error', fail);
 
   let buf = '';
   child.stdout.on('data', (chunk) => {
@@ -152,7 +152,7 @@ export async function* turn(
     if (!sawMessage) proc.routes.get(req.id)?.(null);
   }, 90_000);
 
-  proc.child.stdin.write(JSON.stringify({ op: 'turn', ...req }) + '\n');
+  proc.child.stdin?.write(JSON.stringify({ op: 'turn', ...req }) + '\n');
 
   let done = false;
   try {
@@ -185,7 +185,7 @@ export async function* turn(
     // stop the container-side work instead of letting it run invisibly.
     if (!done && proc.child.exitCode === null && !proc.child.killed) {
       try {
-        proc.child.stdin.write(JSON.stringify({ op: 'interrupt', id: req.id }) + '\n');
+        proc.child.stdin?.write(JSON.stringify({ op: 'interrupt', id: req.id }) + '\n');
       } catch {
         // stdin already gone — nothing left to stop
       }
@@ -196,7 +196,7 @@ export async function* turn(
 export function interrupt(envId: string, turnId: string): void {
   const proc = runners.get(envId);
   if (proc && proc.child.exitCode === null) {
-    proc.child.stdin.write(JSON.stringify({ op: 'interrupt', id: turnId }) + '\n');
+    proc.child.stdin?.write(JSON.stringify({ op: 'interrupt', id: turnId }) + '\n');
   }
 }
 
@@ -208,7 +208,7 @@ export function answerAsk(
 ): void {
   const proc = runners.get(envId);
   if (proc && proc.child.exitCode === null) {
-    proc.child.stdin.write(JSON.stringify({ op: 'answer', id: turnId, askId, answers }) + '\n');
+    proc.child.stdin?.write(JSON.stringify({ op: 'answer', id: turnId, askId, answers }) + '\n');
   }
 }
 

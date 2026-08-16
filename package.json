@@ -10,7 +10,10 @@
     "package": "electron-forge package",
     "make": "electron-forge make",
     "publish": "electron-forge publish",
-    "lint": "eslint --ext .ts,.tsx ."
+    "lint": "eslint --ext .ts,.tsx .",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "node test/e2e/smoke.mjs"
   },
   "keywords": [],
   "author": {
@@ -36,10 +39,13 @@
     "eslint": "^8.57.1",
     "eslint-plugin-import": "^2.32.0",
     "fork-ts-checker-webpack-plugin": "^7.3.0",
+    "jsdom": "^30.0.1",
     "node-loader": "^2.1.0",
+    "playwright-core": "^1.62.1",
     "style-loader": "^3.3.4",
     "ts-loader": "^9.6.2",
-    "typescript": "~5.4.5"
+    "typescript": "~5.4.5",
+    "vitest": "^4.1.10"
   },
   "dependencies": {
     "dompurify": "^3.4.13",

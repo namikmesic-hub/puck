@@ -8,8 +8,9 @@
 
 import './index.css';
 import './harness/bridge';
-import { marked } from 'marked';
-import DOMPurify from 'dompurify';
+import { armDelete, el, flashSaved, showToast, statusEl } from './renderer/dom';
+import { dayLabel, fmtClock, fmtTime, fmtTokens, relTime } from './renderer/format';
+import { renderMd } from './renderer/markdown';
 import { IpcHarness } from './harness/ipc';
 import type {
   AgentInfo,
@@ -106,47 +107,6 @@ const dSecretVal = document.getElementById('d-secret-val') as HTMLInputElement;
 const dSecretAdd = document.getElementById('d-secret-add') as HTMLButtonElement;
 const dSave = document.getElementById('d-save') as HTMLButtonElement;
 
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  className: string,
-  text?: string,
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
-
-/** Two-stage destructive button: first click arms it ("Confirm?"), second fires. */
-function armDelete(btn: HTMLButtonElement, fn: () => void | Promise<void>): void {
-  const label = btn.textContent ?? 'Delete';
-  let disarm: ReturnType<typeof setTimeout> | null = null;
-  btn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    if (disarm) {
-      clearTimeout(disarm);
-      disarm = null;
-      void fn();
-    } else {
-      btn.textContent = 'Confirm?';
-      btn.classList.add('armed');
-      disarm = setTimeout(() => {
-        disarm = null;
-        btn.textContent = label;
-        btn.classList.remove('armed');
-      }, 3000);
-    }
-  });
-}
-
-/** Bottom-corner toast for failures that must not stay invisible. */
-function showToast(message: string): void {
-  document.querySelector('.toast')?.remove();
-  const toast = el('div', 'toast', message);
-  document.body.appendChild(toast);
-  setTimeout(() => toast.remove(), 6000);
-}
-
 /** Persist a conversation's structured log; failures surface as a toast. */
 function persistConversation(session: Session): void {
   if (!session.agentId || !bridge) return;
@@ -178,15 +138,6 @@ function schedulePersist(session: Session): void {
   );
 }
 
-/** Brief success acknowledgment on a save button. */
-function flashSaved(btn: HTMLButtonElement): void {
-  const label = btn.textContent;
-  btn.textContent = 'Saved ✓';
-  setTimeout(() => {
-    btn.textContent = label;
-  }, 1600);
-}
-
 // Sticky scrolling: follow the stream only while the user is at the bottom.
 let stickToBottom = true;
 chat.addEventListener('scroll', () => {
@@ -198,24 +149,10 @@ function scrollChat(force = false): void {
   chat.scrollTo({ top: chat.scrollHeight });
 }
 
-/* ---------- Markdown (agent replies are markdown-dense) ---------- */
+/* ---------- Markdown link containment ---------- */
 
-marked.setOptions({ gfm: true, breaks: false });
-
-// Chat markdown is remote-authored. Anchors get target/rel forced here, and
-// the delegated click handler below routes them to the system browser — a
-// link must never navigate the app window (it would inherit the IPC bridge).
-DOMPurify.addHook('afterSanitizeAttributes', (node) => {
-  if (node.tagName === 'A') {
-    node.setAttribute('target', '_blank');
-    node.setAttribute('rel', 'noopener noreferrer');
-  }
-});
-
-function renderMd(src: string): string {
-  return DOMPurify.sanitize(marked.parse(src, { async: false }));
-}
-
+// Chat anchors are sanitized in renderer/markdown.ts; clicks route to the
+// system browser here — a link must never navigate the app window.
 document.addEventListener('click', (e) => {
   const anchor = (e.target as HTMLElement).closest('a[href]') as HTMLAnchorElement | null;
   if (!anchor) return;
@@ -390,14 +327,6 @@ function stopAuthPoll(): void {
   waitingAuthProvider = null;
   if (authPoll) clearInterval(authPoll);
   authPoll = null;
-}
-
-/** Status chip: dot + word, on/off. */
-function statusEl(on: boolean, label: string): HTMLElement {
-  const wrap = el('span', 'status' + (on ? ' on' : ''));
-  wrap.appendChild(el('span', 'dot'));
-  wrap.appendChild(document.createTextNode(label));
-  return wrap;
 }
 
 /* ---------- Agents (settings section + detail page) ---------- */
@@ -1054,19 +983,9 @@ function openConversation(agentId: string): void {
   prompt.focus();
 }
 
-function relTime(ts: number): string {
-  const delta = Date.now() - ts;
-  if (delta < 60_000) return 'just now';
-  if (delta < 3_600_000) return `${Math.floor(delta / 60_000)}m ago`;
-  if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)}h ago`;
-  return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
 
 let current: Session = freshSession();
 
-function fmtTokens(n: number): string {
-  return n >= 1000 ? `${parseFloat((n / 1000).toFixed(1))}k` : `${n}`;
-}
 
 /** Full-screen turn detail: the detail node is MOVED into the overlay and
  *  returned home on back, so live streaming keeps rendering either way. */
@@ -1127,27 +1046,10 @@ function mountSession(session: Session): void {
   syncComposer();
 }
 
-function fmtTime(ts: number): string {
-  return new Date(ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-}
-
-/** Second-precision clock for tool calls (several often share a minute). */
-function fmtClock(ts: number): string {
-  return new Date(ts).toLocaleTimeString(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
-}
-
 /** Slack-style day separator, inserted when the calendar day changes. The
  *  last label lives in a dataset attribute — no DOM scan per message. */
 function maybeDayDivider(container: HTMLElement, ts = Date.now()): void {
-  const label = new Date(ts).toLocaleDateString(undefined, {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-  });
+  const label = dayLabel(ts);
   if (container.dataset.day === label) return;
   container.dataset.day = label;
   const divider = el('li', 'day-divider');
