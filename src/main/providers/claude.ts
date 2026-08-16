@@ -2,6 +2,7 @@
 
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { clearAuthSession } from '../authwindow';
 import type { Provider } from './types';
 import * as oauth from './claude-oauth';
 
@@ -29,7 +30,10 @@ export const claudeProvider: Provider = {
       };
     },
     start: async () => oauth.startLogin(),
-    logout: () => oauth.logout(),
+    logout: () => {
+      oauth.logout();
+      clearAuthSession();
+    },
     setOnLogin: (cb) => oauth.setOnLogin(cb),
   },
 

@@ -7,9 +7,17 @@
  * identity providers refuse embedded/"insecure" browsers otherwise).
  */
 
-import { BrowserWindow } from 'electron';
+import { BrowserWindow, session } from 'electron';
 
 let current: BrowserWindow | null = null;
+
+/**
+ * Wipe the sign-in partition (cookies, storage). Called on provider logout —
+ * otherwise the next "Connect" silently re-authenticates the same account.
+ */
+export function clearAuthSession(): void {
+  void session.fromPartition('persist:puck-auth').clearStorageData();
+}
 
 export function openAuthWindow(url: string, title: string): BrowserWindow {
   closeAuthWindow();

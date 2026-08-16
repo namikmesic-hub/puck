@@ -22,6 +22,10 @@ const config: ForgeConfig = {
     new AutoUnpackNativesPlugin({}),
     new WebpackPlugin({
       mainConfig,
+      // Dev-server CSP: webpack needs eval sourcemaps + ws; packaged builds
+      // get the strict policy from src/index.ts instead.
+      devContentSecurityPolicy:
+        "default-src 'self' 'unsafe-inline' 'unsafe-eval' data:; connect-src 'self' ws:",
       renderer: {
         config: rendererConfig,
         entryPoints: [

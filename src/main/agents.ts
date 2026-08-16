@@ -88,7 +88,7 @@ export function list(): AgentInfo[] {
 
 export function create(cfg: Omit<AgentConfig, 'id'>): AgentInfo[] {
   const s = load();
-  s.agents.push({ id: Date.now().toString(36), ...sanitize(cfg) });
+  s.agents.push({ id: crypto.randomUUID(), ...sanitize(cfg) });
   save();
   return list();
 }

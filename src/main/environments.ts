@@ -180,7 +180,7 @@ function sanitize(cfg: EnvironmentConfig, id: string): Omit<StoredEnv, 'id'> {
 
 export async function create(cfg: EnvironmentConfig): Promise<EnvironmentInfo[]> {
   const s = load();
-  const id = Date.now().toString(36);
+  const id = crypto.randomUUID();
   s.environments.push({ id, ...sanitize(cfg, id) });
   if (!s.activeEnvId) s.activeEnvId = id;
   save();

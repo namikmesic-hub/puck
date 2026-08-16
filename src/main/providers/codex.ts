@@ -2,6 +2,7 @@
 
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { clearAuthSession } from '../authwindow';
 import type { Provider } from './types';
 import * as oauth from './codex-oauth';
 
@@ -26,7 +27,10 @@ export const codexProvider: Provider = {
   auth: {
     status: () => oauth.status(),
     start: () => oauth.startLogin(),
-    logout: () => oauth.logout(),
+    logout: () => {
+      oauth.logout();
+      clearAuthSession();
+    },
     setOnLogin: (cb) => oauth.setOnLogin(cb),
   },
 

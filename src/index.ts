@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as agents from './main/agents';
@@ -181,7 +181,26 @@ ipcMain.handle(
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
-app.on('ready', createWindow);
+app.on('ready', () => {
+  // Packaged builds get a strict CSP; dev needs webpack's eval sourcemaps,
+  // covered by the WebpackPlugin devContentSecurityPolicy instead.
+  if (app.isPackaged) {
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          'Content-Security-Policy': [
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:",
+          ],
+        },
+      });
+    });
+  }
+  createWindow();
+});
+
+// Kill runner docker-exec children on quit — no orphaned processes.
+app.on('before-quit', () => runner.detachAll());
 
 // Quit when all windows are closed, except on macOS. There, it's common
 // for applications and their menu bar to stay active until the user quits

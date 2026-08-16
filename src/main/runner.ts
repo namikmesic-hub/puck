@@ -220,3 +220,8 @@ export function detach(envId: string): void {
     runners.delete(envId);
   }
 }
+
+/** Kill every runner exec on app quit — no orphaned docker processes. */
+export function detachAll(): void {
+  for (const envId of [...runners.keys()]) detach(envId);
+}

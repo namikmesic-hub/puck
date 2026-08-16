@@ -300,6 +300,7 @@ function showView(view: View): void {
   } else if (view === 'agent-detail') {
     agentBack.focus();
   } else {
+    stopAuthPoll(); // leaving settings abandons any pending connect poll
     void refreshStatus();
     prompt.focus();
   }
@@ -308,6 +309,7 @@ function showView(view: View): void {
 // Escape walks back up the view hierarchy: detail → settings → chat.
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
+  if (palette) return closePalette();
   if (menu) return closeMenu();
   if (currentView === 'chat' && fullTurn) return closeFullTurn();
   if (currentView === 'agent-detail') {
@@ -332,6 +334,7 @@ heroCta.addEventListener('click', () => {
 
 let waitingAuthProvider: string | null = null;
 let authPoll: ReturnType<typeof setInterval> | null = null;
+let authPollStarted = 0;
 
 function stopAuthPoll(): void {
   waitingAuthProvider = null;
@@ -343,9 +346,23 @@ function stopAuthPoll(): void {
 
 let detailAgentId: string | null = null;
 
+// Monotonic request tokens: rapid tab switches must not land stale content.
+let agentsReq = 0;
+let providersReq = 0;
+let envsReq = 0;
+
+function loadingInto(container: HTMLElement): void {
+  container.setAttribute('aria-busy', 'true');
+  if (!container.children.length) container.appendChild(el('div', 'cards-loading', 'Loading…'));
+}
+
 async function renderAgents(): Promise<void> {
   if (!bridge) return;
+  const token = ++agentsReq;
+  loadingInto(agentCards);
   const infos = await bridge.agentList().catch(() => []);
+  if (token !== agentsReq) return;
+  agentCards.removeAttribute('aria-busy');
   agentInfos = infos; // the sidebar roster follows Settings
   renderRecents();
   agentCards.textContent = '';
@@ -539,7 +556,11 @@ agentBack.addEventListener('click', () => {
 
 async function renderProviders(): Promise<void> {
   if (!bridge) return;
+  const token = ++providersReq;
+  loadingInto(providerCards);
   const infos = await loadProviders();
+  if (token !== providersReq) return;
+  providerCards.removeAttribute('aria-busy');
   providerCards.textContent = '';
   for (const info of infos) {
     const card = el('div', 'card');
@@ -571,8 +592,15 @@ async function renderProviders(): Promise<void> {
           stopAuthPoll();
           await bridge.providerAuthStart(info.id);
           waitingAuthProvider = info.id;
-          // The login completes in the app's sign-in window — poll until it lands.
+          authPollStarted = Date.now();
+          // The login completes in the app's sign-in window — poll until it
+          // lands, giving up after 3 minutes if the user abandoned it.
           authPoll = setInterval(async () => {
+            if (Date.now() - authPollStarted > 180_000) {
+              stopAuthPoll();
+              await renderProviders();
+              return;
+            }
             const latest = await loadProviders();
             if (latest.find((p) => p.id === info.id)?.auth.connected) {
               stopAuthPoll();
@@ -603,7 +631,11 @@ async function refreshAfterEnvOp(): Promise<void> {
 
 async function renderEnvs(): Promise<EnvironmentInfo[]> {
   if (!bridge) return [];
+  const token = ++envsReq;
+  loadingInto(envCards); // envList shells out to docker — visibly slow
   const envs = await bridge.envList().catch(() => [] as EnvironmentInfo[]);
+  if (token !== envsReq) return envs;
+  envCards.removeAttribute('aria-busy');
   envCards.textContent = '';
   for (const env of envs) {
     const card = el('div', 'card clickable');
@@ -1084,6 +1116,7 @@ function messageRow(
   const item = el('li', `msg-row ${kind}`);
   item.dataset.author = author;
   item.dataset.ts = String(ts);
+  item.dataset.groupStart = String(ts); // the header's time never slides
   const main = el('div', 'row-main');
   const head = el('div', 'row-head');
   head.append(el('span', 'row-author', author), el('span', 'row-time', fmtTime(ts)));
@@ -1138,12 +1171,25 @@ function renderRecentsNow(): void {
     btn.title =
       providerLabel(info.provider) +
       (conv && conv.turns > 0
-        ? ` · ${fmtTokens(conv.usage)} · ${relTime(conv.lastActiveAt)}`
+        ? ` · ctx ${fmtTokens(conv.usage)} · ${relTime(conv.lastActiveAt)}`
         : ' · no messages yet');
     btn.addEventListener('click', () => openConversation(info.id));
     item.appendChild(btn);
     const state = conv?.running ? 'running' : conv?.unread;
     if (state) item.appendChild(statusDot(state));
+    if (conv?.running && conv.turnId) {
+      // Background turns are stoppable from the roster, not just when open.
+      const stopBtn = el('button', 'recent-stop');
+      stopBtn.type = 'button';
+      stopBtn.title = `Stop ${info.name}'s turn`;
+      stopBtn.innerHTML =
+        '<svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>';
+      stopBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (conv.turnId && harness) harness.interrupt(conv.turnId);
+      });
+      item.appendChild(stopBtn);
+    }
     recentsList.appendChild(item);
 
     // Sub-agent chats, nested under the conversation that spawned them.
@@ -1192,12 +1238,17 @@ function addUserMessage(session: Session, text: string, author = USER_NAME, ts =
       session.title = `${clean.slice(0, cut > 24 ? cut : 48)}…`;
     }
   }
-  // Slack-style grouping: rapid consecutive messages share one header.
+  // Slack-style grouping: rapid consecutive messages share one header —
+  // capped at 15 minutes from the group's start (the sliding 5-minute
+  // window alone never breaks), and never across midnight.
   const last = session.thread.lastElementChild as HTMLElement | null;
+  const groupStart = Number(last?.dataset.groupStart ?? 0);
   if (
     last?.classList.contains('msg-row') &&
     last.dataset.author === author &&
-    ts - Number(last.dataset.ts) < 300_000
+    ts - Number(last.dataset.ts) < 300_000 &&
+    ts - groupStart < 900_000 &&
+    dayLabel(ts) === dayLabel(groupStart)
   ) {
     last.dataset.ts = String(ts);
     const grouped = el('div', 'row-body prose');
@@ -1347,7 +1398,17 @@ function addAssistantTurn(session: Session, turnId: string, ts = Date.now()) {
       this.setThinking(false);
       flushProse();
       closeAsks();
-      content.appendChild(el('div', 'error-block', message));
+      // Repeated identical errors collapse into one block with a counter.
+      const last = content.lastElementChild as HTMLElement | null;
+      if (last?.classList.contains('error-block') && last.dataset.message === message) {
+        const count = Number(last.dataset.count ?? 1) + 1;
+        last.dataset.count = String(count);
+        last.textContent = `${message} (×${count})`;
+      } else {
+        const block = el('div', 'error-block', message);
+        block.dataset.message = message;
+        content.appendChild(block);
+      }
       scrollToBottom();
     },
 
@@ -1899,6 +1960,126 @@ addAgentBtn.addEventListener('click', () => {
 });
 
 turnFullBack.addEventListener('click', closeFullTurn);
+
+/* ---------- Command palette: Cmd+K switches agents + searches history ---------- */
+
+let palette: HTMLElement | null = null;
+
+function closePalette(): void {
+  palette?.remove();
+  palette = null;
+}
+
+function openPalette(): void {
+  closePalette();
+  palette = el('div', 'palette-overlay');
+  const box = el('div', 'palette');
+  const input = document.createElement('input');
+  input.className = 'palette-input';
+  input.placeholder = 'Jump to an agent or search messages…';
+  const list = el('div', 'palette-list');
+  box.append(input, list);
+  palette.appendChild(box);
+  palette.addEventListener('click', (e) => {
+    if (e.target === palette) closePalette();
+  });
+  document.body.appendChild(palette);
+
+  const entryText = (entry: ConversationEntry): string =>
+    entry.kind === 'user'
+      ? entry.text
+      : entry.events
+          .filter((e) => e.kind === 'text-delta')
+          .map((e) => (e.kind === 'text-delta' ? e.text : ''))
+          .join(' ');
+
+  const refresh = (): void => {
+    const q = input.value.trim().toLowerCase();
+    list.textContent = '';
+    const items: { label: string; sub: string; go: () => void }[] = [];
+    for (const info of agentInfos) {
+      if (!q || info.name.toLowerCase().includes(q)) {
+        items.push({
+          label: info.name,
+          sub: providerLabel(info.provider),
+          go: () => openConversation(info.id),
+        });
+      }
+    }
+    if (q.length >= 2) {
+      for (const info of agentInfos) {
+        const conv = conversations.get(info.id);
+        const log = conv?.pendingLog ?? conv?.log ?? [];
+        for (const entry of log) {
+          const text = entryText(entry);
+          const idx = text.toLowerCase().indexOf(q);
+          if (idx === -1) continue;
+          const snippet = text
+            .slice(Math.max(0, idx - 24), idx + q.length + 40)
+            .split(/\s+/)
+            .join(' ');
+          items.push({
+            label: `“…${snippet}…”`,
+            sub: `in ${info.name}`,
+            go: () => openConversation(info.id),
+          });
+          break; // one hit per conversation keeps the list scannable
+        }
+      }
+    }
+    for (const item of items.slice(0, 12)) {
+      const row = el('button', 'palette-item');
+      row.type = 'button';
+      row.append(el('span', 'palette-label', item.label), el('span', 'palette-sub', item.sub));
+      row.addEventListener('click', () => {
+        closePalette();
+        item.go();
+      });
+      list.appendChild(row);
+    }
+  };
+
+  input.addEventListener('input', refresh);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closePalette();
+    else if (e.key === 'Enter') (list.firstElementChild as HTMLElement | null)?.click();
+    else if (e.key === 'ArrowDown') {
+      (list.firstElementChild as HTMLElement | null)?.focus();
+      e.preventDefault();
+    }
+  });
+  list.addEventListener('keydown', (e) => {
+    const target = e.target as HTMLElement;
+    if (e.key === 'ArrowDown') {
+      (target.nextElementSibling as HTMLElement | null)?.focus();
+      e.preventDefault();
+    } else if (e.key === 'ArrowUp') {
+      ((target.previousElementSibling as HTMLElement | null) ?? input).focus();
+      e.preventDefault();
+    } else if (e.key === 'Escape') closePalette();
+  });
+  refresh();
+  input.focus();
+}
+
+document.addEventListener('keydown', (e) => {
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    if (palette) closePalette();
+    else openPalette();
+  } else if (mod && e.key === ',') {
+    e.preventDefault();
+    settingsTab = 'agents';
+    showView('settings');
+  } else if (mod && /^[1-9]$/.test(e.key)) {
+    const info = agentInfos[Number(e.key) - 1];
+    if (info) {
+      e.preventDefault();
+      openConversation(info.id);
+    }
+  }
+});
 
 // Composer mode chips (Search / Code) are visual toggles for now.
 document.querySelectorAll('.tool-chip.toggle').forEach((btn) => {
