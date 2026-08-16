@@ -138,6 +138,7 @@ export async function secretSet(id: string, key: string, value: string): Promise
   const secrets = envSecrets(id);
   secrets[cleaned] = value;
   saveSecret(secretsStoreName(id), JSON.stringify(secrets));
+  if ((await runtimeStatus(id)) === 'running') await injectSecretsFile(id);
   return list();
 }
 
@@ -146,6 +147,7 @@ export async function secretDelete(id: string, key: string): Promise<Environment
   const secrets = envSecrets(id);
   delete secrets[key];
   saveSecret(secretsStoreName(id), JSON.stringify(secrets));
+  if ((await runtimeStatus(id)) === 'running') await injectSecretsFile(id);
   return list();
 }
 
@@ -194,44 +196,74 @@ export async function update(id: string, cfg: EnvironmentConfig): Promise<Enviro
   return list();
 }
 
-export async function remove(id: string): Promise<EnvironmentInfo[]> {
-  requireEnv(id);
-  await docker(['rm', '-f', containerName(id)]);
-  await docker(['rmi', imageTag(id)]);
-  deleteSecret(secretsStoreName(id));
-  const s = load();
-  s.environments = s.environments.filter((e) => e.id !== id);
-  if (s.activeEnvId === id) s.activeEnvId = s.environments[0]?.id ?? null;
-  save();
-  return list();
-}
-
-export async function restart(id: string): Promise<EnvironmentInfo[]> {
-  await stop(id);
-  return start(id);
-}
-
-/** Destroy the container and recreate from current config (incl. build). */
-export async function rebuild(id: string): Promise<EnvironmentInfo[]> {
-  await stop(id); // adopts rotated credentials; ignores not-running
-  await docker(['rm', '-f', containerName(id)]);
-  return start(id);
-}
-
 function imageTag(id: string): string {
   return `puck-img-${id}`;
 }
 
-const startsInFlight = new Map<string, Promise<EnvironmentInfo[]>>();
+/** Notified when an environment's container state is destroyed (rebuild /
+ *  remove) — the backend drops that environment's resume ids. */
+let onReset: ((envId: string) => void) | null = null;
+export function onEnvReset(cb: (envId: string) => void): void {
+  onReset = cb;
+}
+
+// One mutex per environment across ALL lifecycle ops: a queued start must
+// not resurrect a just-deleted container, and rm must not race a doStart.
+const envLocks = new Map<string, Promise<unknown>>();
+function withEnvLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
+  const prev = envLocks.get(id) ?? Promise.resolve();
+  const task = prev.catch(() => undefined).then(fn);
+  envLocks.set(id, task);
+  void task.catch(() => undefined).finally(() => {
+    if (envLocks.get(id) === task) envLocks.delete(id);
+  });
+  return task;
+}
 
 export function start(id: string): Promise<EnvironmentInfo[]> {
-  // Serialize concurrent starts of the same environment — two racing
-  // `docker run`s would collide on the container name.
-  const inFlight = startsInFlight.get(id);
-  if (inFlight) return inFlight;
-  const task = doStart(id).finally(() => startsInFlight.delete(id));
-  startsInFlight.set(id, task);
-  return task;
+  return withEnvLock(id, () => doStart(id));
+}
+
+export function stop(id: string): Promise<EnvironmentInfo[]> {
+  return withEnvLock(id, async () => {
+    requireEnv(id);
+    await doStop(id);
+    return list();
+  });
+}
+
+export function restart(id: string): Promise<EnvironmentInfo[]> {
+  return withEnvLock(id, async () => {
+    requireEnv(id);
+    await doStop(id);
+    return doStart(id);
+  });
+}
+
+/** Destroy the container and recreate from current config (incl. build). */
+export function rebuild(id: string): Promise<EnvironmentInfo[]> {
+  return withEnvLock(id, async () => {
+    requireEnv(id);
+    await doStop(id); // adopts rotated credentials; ignores not-running
+    await docker(['rm', '-f', containerName(id)]);
+    onReset?.(id); // container transcripts are gone — resume ids with them
+    return doStart(id);
+  });
+}
+
+export function remove(id: string): Promise<EnvironmentInfo[]> {
+  return withEnvLock(id, async () => {
+    requireEnv(id);
+    await docker(['rm', '-f', containerName(id)]);
+    await docker(['rmi', imageTag(id)]);
+    deleteSecret(secretsStoreName(id));
+    const s = load();
+    s.environments = s.environments.filter((e) => e.id !== id);
+    if (s.activeEnvId === id) s.activeEnvId = s.environments[0]?.id ?? null;
+    save();
+    onReset?.(id);
+    return list();
+  });
 }
 
 async function doStart(id: string): Promise<EnvironmentInfo[]> {
@@ -275,8 +307,10 @@ async function doStart(id: string): Promise<EnvironmentInfo[]> {
     for (const key of FORWARDED_ENV) {
       if (process.env[key]) args.push('-e', `${key}=${process.env[key]}`);
     }
-    // User-configured env vars, then secrets (secrets win on collision).
-    for (const [key, value] of Object.entries({ ...(env.envVars ?? {}), ...envSecrets(id) })) {
+    // User-configured env vars. Secrets deliberately do NOT go through -e:
+    // docker inspect would expose them forever — they travel as a root-only
+    // file the runner applies to its own environment (injectSecretsFile).
+    for (const [key, value] of Object.entries(env.envVars ?? {})) {
       args.push('-e', `${key}=${value}`);
     }
     // `--` ends option parsing so a hostile image string can't become a flag.
@@ -312,14 +346,34 @@ async function doStart(id: string): Promise<EnvironmentInfo[]> {
   }
 
   // Deploy (or refresh) the runner agent.
-  const runnerTmp = path.join(os.tmpdir(), `puck-runner-${id}.js`);
-  fs.writeFileSync(runnerTmp, RUNNER_SOURCE);
-  const cp = await docker(['cp', runnerTmp, `${containerName(id)}:/opt/puck/runner.js`]);
-  if (cp.code !== 0) throw new Error(`Runner deploy failed: ${cp.stderr.trim().slice(-400)}`);
+  const runnerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'puck-runner-'));
+  try {
+    const runnerTmp = path.join(runnerDir, 'runner.js');
+    fs.writeFileSync(runnerTmp, RUNNER_SOURCE, { mode: 0o600 });
+    const cp = await docker(['cp', runnerTmp, `${containerName(id)}:/opt/puck/runner.js`]);
+    if (cp.code !== 0) throw new Error(`Runner deploy failed: ${cp.stderr.trim().slice(-400)}`);
+  } finally {
+    fs.rmSync(runnerDir, { recursive: true, force: true });
+  }
 
+  await injectSecretsFile(id);
   // Puck-managed OAuth tokens win over host files when fresher.
   for (const p of providers) await injectCredentials(id, p);
   return list();
+}
+
+/** Environment secrets as a root-only container file (never docker argv). */
+async function injectSecretsFile(id: string): Promise<void> {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'puck-secrets-'));
+  try {
+    const tmp = path.join(tmpDir, 'secrets.json');
+    fs.writeFileSync(tmp, JSON.stringify(envSecrets(id)), { mode: 0o600 });
+    await docker(['exec', containerName(id), 'mkdir', '-p', '/opt/puck']);
+    await docker(['cp', tmp, `${containerName(id)}:/opt/puck/secrets.json`]);
+    await docker(['exec', containerName(id), 'chmod', '600', '/opt/puck/secrets.json']);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -336,11 +390,15 @@ async function injectCredentials(id: string, p: Provider): Promise<void> {
     cred.adoptIfNewer(existing.stdout);
     if (!snapshot.supersedes(existing.stdout)) return;
   }
-  const tmp = path.join(os.tmpdir(), `puck-cred-${p.id}-${id}.json`);
-  fs.writeFileSync(tmp, snapshot.content, { mode: 0o600 });
-  await docker(['exec', containerName(id), 'mkdir', '-p', path.posix.dirname(cred.containerPath)]);
-  await docker(['cp', tmp, `${containerName(id)}:${cred.containerPath}`]);
-  fs.unlinkSync(tmp);
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'puck-cred-'));
+  try {
+    const tmp = path.join(tmpDir, 'cred.json');
+    fs.writeFileSync(tmp, snapshot.content, { mode: 0o600 });
+    await docker(['exec', containerName(id), 'mkdir', '-p', path.posix.dirname(cred.containerPath)]);
+    await docker(['cp', tmp, `${containerName(id)}:${cred.containerPath}`]);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 }
 
 /** Push freshly obtained credentials into every running environment. */
@@ -352,15 +410,14 @@ export async function injectCredentialsIntoRunning(): Promise<void> {
   }
 }
 
-export async function stop(id: string): Promise<EnvironmentInfo[]> {
+async function doStop(id: string): Promise<void> {
   // Providers may have rotated tokens inside the container — adopt them
   // before the container goes away so Puck's copies stay valid.
   for (const p of providers) {
     const creds = await docker(['exec', containerName(id), 'cat', p.container.credential.containerPath]);
     if (creds.code === 0) p.container.credential.adoptIfNewer(creds.stdout);
   }
-  await docker(['stop', containerName(id)]);
-  return list();
+  await docker(['stop', containerName(id)], 60_000);
 }
 
 export function select(id: string): void {

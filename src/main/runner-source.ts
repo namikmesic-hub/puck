@@ -25,6 +25,14 @@ const CWD = '/workspace';
 // Claude Code refuses bypassPermissions as root unless it knows it's sandboxed.
 process.env.IS_SANDBOX = '1';
 
+// Environment secrets arrive as a root-only file (never in docker argv or
+// container config, where docker inspect would expose them). Applied before
+// any SDK loads so agent subprocesses inherit them.
+try {
+  const secretEnv = JSON.parse(require('node:fs').readFileSync('/opt/puck/secrets.json', 'utf8'));
+  for (const key in secretEnv) process.env[key] = String(secretEnv[key]);
+} catch (err) { /* no secrets configured */ }
+
 const active = new Map(); // request id -> interrupt fn
 
 function send(obj) {
@@ -404,14 +412,13 @@ async function runCodex(req, sdk, ctx) {
     prompt = 'System instructions:\\n' + req.systemPrompt + '\\n\\n---\\n\\n' + prompt;
   }
 
-  let stopped = false;
+  const aborter = new AbortController();
   const openTools = new Set();
-  ctx.onInterrupt(function () { stopped = true; });
+  ctx.onInterrupt(function () { aborter.abort(); });
 
   try {
-    const streamed = await thread.runStreamed(prompt);
+    const streamed = await thread.runStreamed(prompt, { signal: aborter.signal });
     for await (const ev of streamed.events) {
-      if (stopped) break;
       if (ev.type === 'thread.started') {
         if (ev.thread_id) ctx.session(ev.thread_id);
       } else if (ev.type === 'item.started' && ev.item) {
@@ -459,6 +466,8 @@ async function runCodex(req, sdk, ctx) {
         ctx.emit({ kind: 'error', message: ev.message || ('Codex ' + ev.type) });
       }
     }
+  } catch (err) {
+    if (!aborter.signal.aborted) throw err; // user stop ends the turn quietly
   } finally {
     if (thread && thread.id) ctx.setSession(thread.id);
   }

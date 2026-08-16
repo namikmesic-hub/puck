@@ -36,6 +36,10 @@ interface RunnerMsg {
 interface RunnerProc {
   child: ChildProcess;
   routes: Map<string, (msg: RunnerMsg | null) => void>;
+  /** Last ~8KB of container stderr — the only diagnostics on failure. */
+  stderrTail: string;
+  /** Resolves on the runner's `{ready:true}` handshake; rejects on death. */
+  ready: Promise<void>;
 }
 
 const runners = new Map<string, RunnerProc>();
@@ -51,11 +55,23 @@ function ensure(envId: string): RunnerProc {
     'exec', '-i', containerName(envId), 'node', '/opt/puck/runner.js',
   ]);
   const routes = new Map<string, (msg: RunnerMsg | null) => void>();
-  const proc: RunnerProc = { child, routes };
+  let readyResolve!: () => void;
+  let readyReject!: (err: Error) => void;
+  const ready = new Promise<void>((resolve, reject) => {
+    readyResolve = resolve;
+    readyReject = reject;
+  });
+  ready.catch(() => undefined); // observed via await in turn(); avoid unhandled
+  const proc: RunnerProc = { child, routes, stderrTail: '', ready };
+  const readyTimer = setTimeout(() => {
+    readyReject(new Error('runner did not report ready within 15s'));
+  }, 15_000);
 
   // A dead exec (container gone, daemon stopped) must fail the turn, not the
   // app: without these handlers an EPIPE on stdin is a process-fatal throw.
   const fail = (): void => {
+    clearTimeout(readyTimer);
+    readyReject(new Error('runner process exited'));
     for (const route of routes.values()) route(null);
     routes.clear();
     if (runners.get(envId) === proc) runners.delete(envId);
@@ -73,22 +89,31 @@ function ensure(envId: string): RunnerProc {
       if (!line) continue;
       try {
         const msg = JSON.parse(line) as RunnerMsg;
+        if (msg.ready) {
+          clearTimeout(readyTimer);
+          readyResolve();
+        }
         if (msg.id) routes.get(msg.id)?.(msg);
       } catch {
         // non-JSON noise
       }
     }
   });
-  child.stderr.on('data', () => undefined);
-  child.on('close', () => {
-    for (const route of routes.values()) route(null);
-    routes.clear();
-    if (runners.get(envId) === proc) runners.delete(envId);
+  child.stderr.on('data', (chunk) => {
+    proc.stderrTail = (proc.stderrTail + String(chunk)).slice(-8000);
   });
+  child.on('close', fail);
 
   runners.set(envId, proc);
   return proc;
 }
+
+function diagnose(proc: RunnerProc, headline: string): string {
+  const tail = proc.stderrTail.trim();
+  return tail ? `${headline}\nContainer stderr:\n${tail.slice(-800)}` : headline;
+}
+
+const endStats = { inputTokens: 0, outputTokens: 0, durationMs: 0 };
 
 export async function* turn(
   envId: string,
@@ -96,6 +121,21 @@ export async function* turn(
   onSession: (providerSessionId: string) => void,
 ): AsyncGenerator<HarnessEvent> {
   const proc = ensure(envId);
+  try {
+    await proc.ready;
+  } catch (err) {
+    yield {
+      kind: 'error',
+      message: diagnose(proc, `Runner failed to start: ${err instanceof Error ? err.message : err}. Try restarting the environment.`),
+    };
+    yield { kind: 'turn-end', stats: endStats };
+    return;
+  }
+  if (proc.routes.has(req.id)) {
+    yield { kind: 'error', message: `Duplicate turn id ${req.id} — refusing to clobber the running turn.` };
+    yield { kind: 'turn-end', stats: endStats };
+    return;
+  }
 
   const queue: Array<RunnerMsg | null> = [];
   let wake: (() => void) | null = null;
@@ -105,31 +145,51 @@ export async function* turn(
     wake = null;
   });
 
+  // Watchdog: a runner that accepts the request but never answers must fail
+  // the turn, not hang it forever. Cleared on the first message.
+  let sawMessage = false;
+  const watchdog = setTimeout(() => {
+    if (!sawMessage) proc.routes.get(req.id)?.(null);
+  }, 90_000);
+
   proc.child.stdin.write(JSON.stringify({ op: 'turn', ...req }) + '\n');
 
+  let done = false;
   try {
     for (;;) {
       if (!queue.length) await new Promise<void>((resolve) => (wake = resolve));
       while (queue.length) {
         const msg = queue.shift();
         if (msg === null || msg === undefined) {
-          yield {
-            kind: 'error',
-            message: 'Runner disconnected — is the environment container still running?',
-          };
-          yield { kind: 'turn-end', stats: { inputTokens: 0, outputTokens: 0, durationMs: 0 } };
+          const headline = sawMessage
+            ? 'Runner disconnected — is the environment container still running?'
+            : 'Runner did not respond within 90s — is the environment container healthy?';
+          yield { kind: 'error', message: diagnose(proc, headline) };
+          yield { kind: 'turn-end', stats: endStats };
           return;
         }
+        sawMessage = true;
         if (msg.session) onSession(msg.session);
         if (msg.event) yield msg.event;
         if (msg.done) {
           if (msg.providerSessionId) onSession(msg.providerSessionId);
+          done = true;
           return;
         }
       }
     }
   } finally {
+    clearTimeout(watchdog);
     proc.routes.delete(req.id);
+    // The consumer went away mid-turn (window reload, generator abandoned):
+    // stop the container-side work instead of letting it run invisibly.
+    if (!done && proc.child.exitCode === null && !proc.child.killed) {
+      try {
+        proc.child.stdin.write(JSON.stringify({ op: 'interrupt', id: req.id }) + '\n');
+      } catch {
+        // stdin already gone — nothing left to stop
+      }
+    }
   }
 }
 

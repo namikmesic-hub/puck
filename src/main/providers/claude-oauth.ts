@@ -69,13 +69,16 @@ export function startLogin(): string {
   const url = `${AUTHORIZE_URL}?${params.toString()}`;
 
   const win = openAuthWindow(url, 'Sign in to Claude');
+  let consumed = false; // three navigation hooks can see one callback
   const intercept = (target: string) => {
-    if (!target.startsWith(REDIRECT_URI)) return;
+    if (consumed || !target.startsWith(REDIRECT_URI)) return;
     try {
       const cb = new URL(target);
       const code = cb.searchParams.get('code');
       const cbState = cb.searchParams.get('state');
       if (code) {
+        if (cbState !== null && cbState !== state) return; // CSRF check
+        consumed = true;
         closeAuthWindow();
         void exchange(code, cbState ?? undefined)
           .then(() => onLoginCb?.())
@@ -93,6 +96,8 @@ export function startLogin(): string {
 
 async function exchange(code: string, state?: string): Promise<void> {
   if (!pending) throw new Error('No login in progress.');
+  const attempt = pending;
+  pending = null; // a code is single-use — never leave a half-open login
   const res = await fetch(TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -101,8 +106,8 @@ async function exchange(code: string, state?: string): Promise<void> {
       client_id: CLIENT_ID,
       code,
       redirect_uri: REDIRECT_URI,
-      code_verifier: pending.verifier,
-      state: state ?? pending.state,
+      code_verifier: attempt.verifier,
+      state: state ?? attempt.state,
     }),
   });
   if (!res.ok) {
@@ -120,7 +125,6 @@ async function exchange(code: string, state?: string): Promise<void> {
     expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
     scopes: data.scope ? data.scope.split(' ') : ['user:inference', 'user:profile'],
   });
-  pending = null;
 }
 
 /** Returns valid tokens, refreshing through the token endpoint when stale. */

@@ -33,6 +33,9 @@ const createWindow = (): void => {
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
+      // Streaming render batches on requestAnimationFrame; an occluded
+      // window must keep painting background conversations truthfully.
+      backgroundThrottling: false,
     },
   });
 
@@ -107,19 +110,20 @@ ipcMain.handle('env:rebuild', (_event, id: unknown) => {
   runner.detach(envId);
   return environments.rebuild(envId);
 });
-ipcMain.handle('env:secret-set', (_event, args: { id: unknown; key: unknown; value: unknown }) =>
-  environments.secretSet(
-    requireId(args.id, 'environment'),
+ipcMain.handle('env:secret-set', (_event, args: { id: unknown; key: unknown; value: unknown }) => {
+  const envId = requireId(args.id, 'environment');
+  runner.detach(envId); // next turn's runner picks up the new secrets file
+  return environments.secretSet(
+    envId,
     typeof args.key === 'string' ? args.key : '',
     typeof args.value === 'string' ? args.value : '',
-  ),
-);
-ipcMain.handle('env:secret-delete', (_event, args: { id: unknown; key: unknown }) =>
-  environments.secretDelete(
-    requireId(args.id, 'environment'),
-    typeof args.key === 'string' ? args.key : '',
-  ),
-);
+  );
+});
+ipcMain.handle('env:secret-delete', (_event, args: { id: unknown; key: unknown }) => {
+  const envId = requireId(args.id, 'environment');
+  runner.detach(envId);
+  return environments.secretDelete(envId, typeof args.key === 'string' ? args.key : '');
+});
 ipcMain.handle('env:select', (_event, id: unknown) => {
   environments.select(requireId(id, 'environment'));
   return backend.status();
