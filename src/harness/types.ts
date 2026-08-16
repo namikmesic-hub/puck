@@ -43,7 +43,14 @@ type HarnessEventBody =
       agent?: boolean;
     }
   | { kind: 'tool-end'; toolId: string; ok: boolean; output: string }
-  | { kind: 'ask'; askId: string; questions: AskQuestion[] }
+  | {
+      kind: 'ask';
+      askId: string;
+      questions: AskQuestion[];
+      /** Recorded renderer-side once answered (null = dismissed), so replayed
+       *  history can show the question and what was chosen. */
+      answers?: Record<string, string> | null;
+    }
   | { kind: 'error'; message: string }
   | { kind: 'turn-end'; stats: TurnStats };
 

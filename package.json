@@ -1,8 +1,8 @@
 {
   "name": "puck",
-  "productName": "puck",
-  "version": "1.0.0",
-  "description": "My Electron application description",
+  "productName": "Puck",
+  "version": "0.1.0",
+  "description": "A macOS desktop client for coding agents — Claude Code and Codex conversations running in Docker sandboxes.",
   "main": ".webpack/main",
   "private": true,
   "scripts": {
@@ -15,7 +15,6 @@
     "typecheck": "tsc --noEmit",
     "test:e2e": "node test/e2e/smoke.mjs"
   },
-  "keywords": [],
   "author": {
     "name": "Namik Mesic",
     "email": "hi@namikmesic.com"
@@ -23,9 +22,6 @@
   "license": "MIT",
   "devDependencies": {
     "@electron-forge/cli": "^7.11.2",
-    "@electron-forge/maker-deb": "^7.11.2",
-    "@electron-forge/maker-rpm": "^7.11.2",
-    "@electron-forge/maker-squirrel": "^7.11.2",
     "@electron-forge/maker-zip": "^7.11.2",
     "@electron-forge/plugin-auto-unpack-natives": "^7.11.2",
     "@electron-forge/plugin-fuses": "^7.11.2",

@@ -12,7 +12,7 @@
   --gold-muted: rgba(212, 175, 55, 0.15);
   --charcoal: #1c1c1a;
   --gray: #6b6b66;
-  --gray-light: #9a9a94;
+  --gray-light: #78786f; /* ≥4.5:1 on cream — timestamps must stay readable */
   --red: #a03c32;
   --line: rgba(46, 94, 78, 0.12);
   --line-soft: rgba(46, 94, 78, 0.07);
@@ -1661,6 +1661,27 @@ svg {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* Replayed answers: free-text answer chip + dismissed note. */
+.ask-free {
+  font-size: 13px;
+}
+
+.ask-dismissed {
+  font-size: 12.5px;
+  color: var(--gray);
+  font-style: italic;
+}
+
+/* Keyboard operability: focused cards and options must be visible. */
+.card.clickable:focus-visible,
+.card.add:focus-visible,
+.turn-card:focus-visible,
+.ask-option:focus-visible,
+.agent-link:focus-visible {
+  outline: 2px solid var(--emerald);
+  outline-offset: 2px;
 }
 
 /* Tool call cards */

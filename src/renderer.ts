@@ -8,7 +8,7 @@
 
 import './index.css';
 import './harness/bridge';
-import { armDelete, el, flashSaved, showToast, statusEl } from './renderer/dom';
+import { armDelete, asButton, el, flashSaved, showToast, statusEl } from './renderer/dom';
 import { dayLabel, fmtClock, fmtTime, fmtTokens, relTime } from './renderer/format';
 import { renderMd } from './renderer/markdown';
 import { IpcHarness } from './harness/ipc';
@@ -286,10 +286,20 @@ function showView(view: View): void {
   settingsView.classList.toggle('hidden', view !== 'settings');
   envDetailView.classList.toggle('hidden', view !== 'env-detail');
   agentDetailView.classList.toggle('hidden', view !== 'agent-detail');
+  // Hidden views must not hold focus or be reachable by AT.
+  stage.inert = view !== 'chat';
+  settingsView.inert = view !== 'settings';
+  envDetailView.inert = view !== 'env-detail';
+  agentDetailView.inert = view !== 'agent-detail';
   openSettingsBtn.classList.toggle('active', view !== 'chat');
   if (view === 'settings') {
     showSettingsTab(settingsTab);
-  } else if (view === 'chat') {
+    settingsBack.focus();
+  } else if (view === 'env-detail') {
+    detailBack.focus();
+  } else if (view === 'agent-detail') {
+    agentBack.focus();
+  } else {
     void refreshStatus();
     prompt.focus();
   }
@@ -341,6 +351,7 @@ async function renderAgents(): Promise<void> {
   agentCards.textContent = '';
   for (const agent of infos) {
     const card = el('div', 'card clickable');
+    asButton(card, `Configure agent ${agent.name}`);
     const head = el('div', 'card-head');
     const title = el('span', 'card-title', agent.name);
     if (agent.active) title.appendChild(el('span', 'badge-active', 'active'));
@@ -405,6 +416,7 @@ async function renderAgents(): Promise<void> {
   }
 
   const add = el('div', 'card add', '+ New agent');
+  asButton(add);
   add.addEventListener('click', async () => {
     agentMsg.textContent = '';
     try {
@@ -595,6 +607,7 @@ async function renderEnvs(): Promise<EnvironmentInfo[]> {
   envCards.textContent = '';
   for (const env of envs) {
     const card = el('div', 'card clickable');
+    asButton(card, `Configure environment ${env.name}`);
 
     const head = el('div', 'card-head');
     const title = el('span', 'card-title', env.name);
@@ -672,6 +685,7 @@ async function renderEnvs(): Promise<EnvironmentInfo[]> {
 
   // Dashed add-card creates an environment and opens its page for configuring.
   const add = el('div', 'card add', '+ New environment');
+  asButton(add);
   add.addEventListener('click', async () => {
     envMsg.textContent = '';
     try {
@@ -990,6 +1004,7 @@ let current: Session = freshSession();
 /** Full-screen turn detail: the detail node is MOVED into the overlay and
  *  returned home on back, so live streaming keeps rendering either way. */
 let fullTurn: { detail: HTMLElement; home: HTMLElement } | null = null;
+let lastFullTrigger: HTMLElement | null = null;
 
 function openFullTurn(session: Session, detail: HTMLElement, title: string): void {
   closeFullTurn();
@@ -998,6 +1013,7 @@ function openFullTurn(session: Session, detail: HTMLElement, title: string): voi
   turnFullCrumb.textContent = session.title;
   turnFullTitle.textContent = title;
   stage.classList.add('turn-full-open');
+  turnFullBack.focus();
 }
 
 function closeFullTurn(): void {
@@ -1005,6 +1021,8 @@ function closeFullTurn(): void {
   fullTurn.home.appendChild(fullTurn.detail);
   fullTurn = null;
   stage.classList.remove('turn-full-open');
+  lastFullTrigger?.focus();
+  lastFullTrigger = null;
 }
 
 /** Follow live output when the growing turn is the one open full screen. */
@@ -1210,7 +1228,8 @@ function addAssistantTurn(session: Session, turnId: string, ts = Date.now()) {
   const turnWork = el('div', 'turn-detail');
   const detailTitle = `Turn · ${fmtTime(ts)}`;
   let steps = 0;
-  const turnCard = el('div', 'turn-card running hidden');
+  const turnCard = el('button', 'turn-card running hidden');
+  turnCard.type = 'button';
   turnCard.title = 'Open turn detail';
   const cardDot = el('span', 'turn-card-dot');
   const cardLabel = el('span', 'turn-card-label', 'Working…');
@@ -1219,7 +1238,10 @@ function addAssistantTurn(session: Session, turnId: string, ts = Date.now()) {
   cardExpand.innerHTML =
     '<svg viewBox="0 0 24 24"><path d="M15 3h6v6" /><path d="M9 21H3v-6" /><path d="m21 3-7 7" /><path d="m3 21 7-7" /></svg>';
   turnCard.append(cardDot, cardLabel, cardLatest, cardExpand);
-  turnCard.addEventListener('click', () => openFullTurn(session, turnWork, detailTitle));
+  turnCard.addEventListener('click', () => {
+    lastFullTrigger = turnCard;
+    openFullTurn(session, turnWork, detailTitle);
+  });
   item.querySelector('.row-main')?.append(turnCard, turnWork);
 
   const workAppend = (node: HTMLElement, stepLabel?: string): void => {
@@ -1354,23 +1376,41 @@ function addAssistantTurn(session: Session, turnId: string, ts = Date.now()) {
         }
         return out;
       };
-      const submit = (answers: Record<string, string> | null) => {
-        if (submitted) return;
+      const setDisabled = (value: boolean) => {
+        card.classList.toggle('answered', value);
+        card.querySelectorAll('button, input').forEach((n) => {
+          (n as HTMLButtonElement | HTMLInputElement).disabled = value;
+        });
+      };
+      const submit = async (answers: Record<string, string> | null) => {
+        if (submitted || !harness) return;
         submitted = true;
+        setDisabled(true);
+        try {
+          await harness.answerAsk(turnId, askId, answers);
+        } catch (err) {
+          // Delivery failed — the agent is still waiting. Re-arm the card.
+          submitted = false;
+          setDisabled(false);
+          showToast(`Couldn't send the answer: ${err instanceof Error ? err.message : err}`);
+          return;
+        }
         const idx = openAsks.indexOf(card);
         if (idx !== -1) openAsks.splice(idx, 1);
-        card.classList.add('answered');
-        card.querySelectorAll('button, input').forEach((n) => {
-          (n as HTMLButtonElement | HTMLInputElement).disabled = true;
-        });
-        harness?.answerAsk(turnId, askId, answers);
+        // Record the outcome so replayed history keeps the question + answer.
+        for (const entry of session.log) {
+          if (entry.kind !== 'turn') continue;
+          const ev = entry.events.find((e) => e.kind === 'ask' && e.askId === askId);
+          if (ev && ev.kind === 'ask') ev.answers = answers;
+        }
+        schedulePersist(session);
         if (answers) this.setThinking(true);
       };
 
       const sendBtn = el('button', 'btn-primary', 'Send answer');
       sendBtn.type = 'button';
       sendBtn.disabled = true;
-      sendBtn.addEventListener('click', () => submit(collect()));
+      sendBtn.addEventListener("click", () => void submit(collect()));
       const refresh = () => {
         sendBtn.disabled = !questions.every(answered);
       };
@@ -1400,7 +1440,7 @@ function addAssistantTurn(session: Session, turnId: string, ts = Date.now()) {
               set.add(option.label);
               opts.querySelectorAll('.ask-option').forEach((b) => b.classList.remove('selected'));
               btn.classList.add('selected');
-              if (instant) return submit(collect());
+              if (instant) return void submit(collect());
             }
             refresh();
           });
@@ -1416,7 +1456,7 @@ function addAssistantTurn(session: Session, turnId: string, ts = Date.now()) {
           refresh();
         });
         other.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter' && questions.every(answered)) submit(collect());
+          if (e.key === "Enter" && questions.every(answered)) void submit(collect());
         });
         sec.appendChild(other);
         card.appendChild(sec);
@@ -1426,13 +1466,47 @@ function addAssistantTurn(session: Session, turnId: string, ts = Date.now()) {
       const dismiss = el('button', 'btn-ghost', 'Dismiss');
       dismiss.type = 'button';
       dismiss.title = 'Let the agent decide on its own';
-      dismiss.addEventListener('click', () => submit(null));
+      dismiss.addEventListener("click", () => void submit(null));
       foot.append(sendBtn, dismiss);
       card.appendChild(foot);
 
       content.appendChild(card);
       openAsks.push(card);
       scrollToBottom();
+    },
+
+    /** Read-only card for a question answered in a previous run. */
+    showAskReplay(questions: AskQuestion[], answers: Record<string, string> | null) {
+      flushProse();
+      prose = null;
+      const card = el('div', 'ask answered');
+      for (const q of questions) {
+        const sec = el('div', 'ask-q');
+        const head = el('div', 'ask-head');
+        if (q.header) head.appendChild(el('span', 'ask-chip', q.header));
+        head.appendChild(el('span', 'ask-question', q.question));
+        sec.appendChild(head);
+        const opts = el('div', 'ask-options');
+        const chosen = answers?.[q.question]?.split(', ') ?? [];
+        for (const option of q.options) {
+          const btn = el('button', 'ask-option');
+          btn.type = 'button';
+          btn.disabled = true;
+          if (chosen.includes(option.label)) btn.classList.add('selected');
+          btn.appendChild(el('span', 'ask-option-label', option.label));
+          if (option.description) btn.appendChild(el('span', 'ask-option-desc', option.description));
+          opts.appendChild(btn);
+        }
+        // Free-text answers that aren't one of the options.
+        const free = answers?.[q.question];
+        if (free && !q.options.some((o) => chosen.includes(o.label))) {
+          opts.appendChild(el('div', 'ask-option selected ask-free', free));
+        }
+        sec.appendChild(opts);
+        card.appendChild(sec);
+      }
+      if (!answers) card.appendChild(el('div', 'ask-dismissed', 'Dismissed — the agent decided on its own.'));
+      content.appendChild(card);
     },
 
     startTool(
@@ -1773,11 +1847,14 @@ function replayLog(session: Session, log: ConversationEntry[], full = false): vo
         case 'error':
           turn.showError(event.message);
           break;
+        case 'ask':
+          // Answered questions replay read-only; unanswered ones (the app
+          // closed mid-question) can't be revived and are skipped.
+          if (event.answers !== undefined) turn.showAskReplay(event.questions, event.answers);
+          break;
         case 'turn-end':
           turn.finish(event.stats);
           break;
-        // 'ask' is interactive-only; answered questions live in the resumed
-        // provider transcript, not the visual history.
       }
     }
     turn.setThinking(false);

@@ -50,6 +50,19 @@ export function showToast(message: string): void {
   setTimeout(() => toast.remove(), 6000);
 }
 
+/** Make a clickable non-button element keyboard- and AT-operable. */
+export function asButton(node: HTMLElement, label?: string): void {
+  node.setAttribute('role', 'button');
+  node.tabIndex = 0;
+  if (label) node.setAttribute('aria-label', label);
+  node.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      node.click();
+    }
+  });
+}
+
 /** Status chip: dot + word, on/off. */
 export function statusEl(on: boolean, label: string): HTMLElement {
   const wrap = el('span', 'status' + (on ? ' on' : ''));

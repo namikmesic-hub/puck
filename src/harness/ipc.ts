@@ -44,8 +44,8 @@ export class IpcHarness implements Harness {
   }
 
   /** Answer (or dismiss, with null) a mid-turn question from the agent. */
-  answerAsk(turnId: string, askId: string, answers: Record<string, string> | null): void {
-    void this.bridge.answerAsk(turnId, askId, answers);
+  answerAsk(turnId: string, askId: string, answers: Record<string, string> | null): Promise<void> {
+    return this.bridge.answerAsk(turnId, askId, answers);
   }
 
   send(sessionId: string, prompt: string): { turnId: string; events: AsyncGenerator<HarnessEvent> } {
