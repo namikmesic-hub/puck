@@ -1312,6 +1312,12 @@ svg {
   white-space: pre-wrap;
 }
 
+.load-earlier {
+  display: flex;
+  justify-content: center;
+  padding: 6px 0 14px;
+}
+
 .day-divider {
   display: flex;
   align-items: center;
@@ -1396,11 +1402,19 @@ svg {
   min-width: 0;
 }
 
-.prose > :first-child {
+/* Streaming splits prose into committed + tail wrappers; display:contents
+   keeps the markdown children flowing as if they were direct .prose kids. */
+.prose-part {
+  display: contents;
+}
+
+.prose > :first-child,
+.prose-part:first-child > :first-child {
   margin-top: 0;
 }
 
-.prose > :last-child {
+.prose > :last-child,
+.prose-part:last-child > :last-child {
   margin-bottom: 0;
 }
 

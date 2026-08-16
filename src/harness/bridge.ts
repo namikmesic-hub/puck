@@ -103,6 +103,8 @@ export interface ConversationData {
   usage: number;
   lastActiveAt: number;
   turns: number;
+  /** Composer draft, restored with the conversation. */
+  draft?: string;
 }
 
 export interface BridgeEventPayload {

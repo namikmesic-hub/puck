@@ -150,12 +150,14 @@ function showToast(message: string): void {
 /** Persist a conversation's structured log; failures surface as a toast. */
 function persistConversation(session: Session): void {
   if (!session.agentId || !bridge) return;
+  if (session === mountedSession) session.draft = prompt.value;
   void bridge
     .convoSave(session.agentId, {
       log: session.log,
       usage: session.usage,
       lastActiveAt: session.lastActiveAt,
       turns: session.turns,
+      draft: session.draft ?? '',
     })
     .catch((err: Error) => showToast(`Couldn't save "${session.title}": ${err.message}`));
 }
@@ -439,7 +441,28 @@ async function renderAgents(): Promise<void> {
     armDelete(remove, async () => {
       agentMsg.textContent = '';
       try {
-        await bridge.agentDelete(agent.id);
+        agentInfos = await bridge.agentDelete(agent.id);
+        // The conversation dies with its agent: stop its turn, drop it and
+        // its sub-agent chats, and move off it if it was on screen.
+        const conv = conversations.get(agent.id);
+        if (conv) {
+          if (conv.turnId && harness) harness.interrupt(conv.turnId);
+          conversations.delete(agent.id);
+          for (const child of sessions.filter((c) => c.parentSessionId === conv.id)) {
+            sessions.splice(sessions.indexOf(child), 1);
+          }
+          if (current === conv || current.parentSessionId === conv.id) {
+            const next = agentInfos[0];
+            if (next) {
+              current = conversationFor(next);
+              hydrate(current);
+            } else {
+              current = freshSession();
+            }
+            mountSession(current);
+          }
+        }
+        renderRecents();
         await refreshStatus();
       } catch (err) {
         agentMsg.textContent = err instanceof Error ? err.message : String(err);
@@ -942,6 +965,13 @@ interface Session {
   turnId: string | null;
   /** Something happened while this session was in the background. */
   unread: 'done' | 'error' | 'ask' | null;
+  /** Unrendered history — replayed lazily on first open (boot stays fast). */
+  pendingLog?: ConversationEntry[];
+  /** Composer draft, private to this conversation. */
+  draft?: string;
+  /** Scroll state, restored when the conversation is remounted. */
+  scrollPos?: number;
+  stick?: boolean;
   /**
    * Tool cards across ALL turns in this session, so a sub-agent resumed in a
    * later turn (SendMessage) streams into its original card.
@@ -1018,9 +1048,9 @@ function openConversation(agentId: string): void {
   if (conv === current) return;
   current = conv;
   conv.unread = null;
+  hydrate(conv);
   mountSession(conv);
   renderRecents();
-  scrollChat(true);
   prompt.focus();
 }
 
@@ -1063,11 +1093,24 @@ function detailFollow(node: HTMLElement): void {
   if (fullTurn?.detail.contains(node)) turnFullBody.scrollTop = turnFullBody.scrollHeight;
 }
 
+let mountedSession: Session | null = null;
+
 /** Swap the chat scroller over to a session's live thread. */
 function mountSession(session: Session): void {
+  if (mountedSession && mountedSession !== session) {
+    // Draft and scroll state are per conversation — never leak across agents.
+    mountedSession.draft = prompt.value;
+    mountedSession.scrollPos = chat.scrollTop;
+    mountedSession.stick = stickToBottom;
+  }
+  mountedSession = session;
   chat.querySelector('.thread')?.remove();
   chat.appendChild(session.thread);
   closeFullTurn(); // full-screen detail belongs to the previous view
+  prompt.value = session.draft ?? '';
+  autosize();
+  stickToBottom = session.stick ?? true;
+  chat.scrollTop = stickToBottom ? chat.scrollHeight : session.scrollPos ?? 0;
   stage.classList.toggle('empty', !session.thread.children.length);
   const isChild = session.parentSessionId !== undefined;
   const info = session.agentId ? agentInfos.find((a) => a.id === session.agentId) : undefined;
@@ -1097,16 +1140,16 @@ function fmtClock(ts: number): string {
   });
 }
 
-/** Slack-style day separator, inserted when the calendar day changes. Reads
- *  the last chip from the DOM so restored transcripts don't repeat a day. */
+/** Slack-style day separator, inserted when the calendar day changes. The
+ *  last label lives in a dataset attribute — no DOM scan per message. */
 function maybeDayDivider(container: HTMLElement, ts = Date.now()): void {
   const label = new Date(ts).toLocaleDateString(undefined, {
     weekday: 'long',
     month: 'long',
     day: 'numeric',
   });
-  const chips = container.querySelectorAll('.day-chip');
-  if (chips.length && chips[chips.length - 1].textContent === label) return;
+  if (container.dataset.day === label) return;
+  container.dataset.day = label;
   const divider = el('li', 'day-divider');
   divider.appendChild(el('span', 'day-chip', label));
   container.appendChild(divider);
@@ -1149,8 +1192,19 @@ function statusDot(state: 'running' | 'done' | 'error' | 'ask'): HTMLElement {
   return dot;
 }
 
-/** Sidebar: the agent roster, each with its permanent chat + sub-agent chats. */
+/** Sidebar renders at most once per frame — callers fire on every event. */
+let recentsQueued = false;
 function renderRecents(): void {
+  if (recentsQueued) return;
+  recentsQueued = true;
+  requestAnimationFrame(() => {
+    recentsQueued = false;
+    renderRecentsNow();
+  });
+}
+
+/** Sidebar: the agent roster, each with its permanent chat + sub-agent chats. */
+function renderRecentsNow(): void {
   recentsList.textContent = '';
   for (const info of agentInfos) {
     const conv = conversations.get(info.id);
@@ -1201,7 +1255,6 @@ function openSession(id: number): void {
   target.unread = null;
   mountSession(target);
   renderRecents();
-  scrollChat(true);
   prompt.focus();
 }
 
@@ -1283,9 +1336,32 @@ function addAssistantTurn(session: Session, turnId: string, ts = Date.now()) {
 
   let prose: HTMLElement | null = null;
   let proseRaw = '';
+  let proseCommitted: HTMLElement | null = null;
+  let proseTail: HTMLElement | null = null;
+  let commitAt = 0;
+  let flushQueued = false;
+
+  // Re-parsing the whole reply per token is quadratic. Instead: text before
+  // the last completed paragraph renders once into a "committed" node (only
+  // when a new paragraph lands, and never inside an open code fence), and
+  // each animation frame re-renders just the small trailing chunk.
+  const fenceClosed = (s: string): boolean => ((s.match(/```/g) ?? []).length & 1) === 0;
+  const flushProse = (): void => {
+    flushQueued = false;
+    if (!prose || !proseCommitted || !proseTail) return;
+    const brk = proseRaw.lastIndexOf('\n\n');
+    if (brk >= 0 && brk + 2 > commitAt && fenceClosed(proseRaw.slice(0, brk))) {
+      commitAt = brk + 2;
+      proseCommitted.innerHTML = renderMd(proseRaw.slice(0, commitAt));
+    }
+    proseTail.innerHTML = renderMd(proseRaw.slice(commitAt));
+    scrollToBottom();
+  };
+
   let thinking: HTMLElement | null = null;
   const tools = session.tools; // session-scoped: resumed sub-agents span turns
   const toolStarts = session.toolStarts;
+  const turnToolIds: string[] = []; // pruned when the turn settles (DOM refs!)
   const openAsks: HTMLElement[] = [];
 
   function closeAsks(): void {
@@ -1329,16 +1405,23 @@ function addAssistantTurn(session: Session, turnId: string, ts = Date.now()) {
       this.setThinking(false);
       if (!prose) {
         prose = el('div', 'prose');
+        proseCommitted = el('div', 'prose-part');
+        proseTail = el('div', 'prose-part');
+        prose.append(proseCommitted, proseTail);
         proseRaw = '';
+        commitAt = 0;
         content.appendChild(prose);
       }
       proseRaw += delta;
-      prose.innerHTML = renderMd(proseRaw);
-      scrollToBottom();
+      if (!flushQueued) {
+        flushQueued = true;
+        requestAnimationFrame(flushProse);
+      }
     },
 
     showError(message: string) {
       this.setThinking(false);
+      flushProse();
       closeAsks();
       content.appendChild(el('div', 'error-block', message));
       scrollToBottom();
@@ -1347,6 +1430,7 @@ function addAssistantTurn(session: Session, turnId: string, ts = Date.now()) {
     /** Renders the agent's mid-turn question(s); answers flow back over the bridge. */
     showAsk(askId: string, questions: AskQuestion[]) {
       this.setThinking(false);
+      flushProse();
       prose = null; // text after the question starts a fresh block
       const card = el('div', 'ask');
       const chosen = new Map<string, Set<string>>();
@@ -1471,6 +1555,7 @@ function addAssistantTurn(session: Session, turnId: string, ts = Date.now()) {
         // Parent thread unknown — fall through and render a normal card.
       }
 
+      flushProse();
       prose = null; // next text delta starts a fresh paragraph block
 
       if (isAgent) {
@@ -1520,6 +1605,7 @@ function addAssistantTurn(session: Session, turnId: string, ts = Date.now()) {
       workAppend(card, summary ? `${tool} · ${summary}` : tool);
       tools.set(toolId, card);
       toolStarts.set(toolId, at);
+      turnToolIds.push(toolId);
     },
 
     endTool(toolId: string, ok: boolean, output: string, at = Date.now()) {
@@ -1558,7 +1644,14 @@ function addAssistantTurn(session: Session, turnId: string, ts = Date.now()) {
 
     finish(stats: TurnStats) {
       this.setThinking(false);
+      flushProse();
       closeAsks();
+      // Plain tool cards can't receive events after turn-end — release the
+      // map entries (agent-link ids stay: resumed sub-agents span turns).
+      for (const toolId of turnToolIds) {
+        tools.delete(toolId);
+        toolStarts.delete(toolId);
+      }
       // Text-only turns stay plain; tool turns settle their dynamic card.
       if (steps > 0) {
         const seconds = (stats.durationMs / 1000).toFixed(1);
@@ -1609,6 +1702,7 @@ async function submit(text: string): Promise<void> {
   if (!trimmed || session.running || !harness) return;
   if (session.parentSessionId !== undefined) return; // sub-agent chats are observed, not driven
   if (!session.agentId) return; // no agent configured yet
+  hydrate(session); // history must be on screen before the new exchange
 
   const { turnId, events } = harness.send(session.agentId, trimmed);
   session.running = true;
@@ -1633,7 +1727,18 @@ async function submit(text: string): Promise<void> {
     for await (const event of events) {
       if (event.kind !== 'thinking') {
         event.ts = Date.now(); // wall-clock stamp survives into replays
-        record.events.push(event);
+        // Merge consecutive text deltas — token-level entries would bloat the
+        // log and make replay quadratic again.
+        const prev = record.events[record.events.length - 1];
+        if (
+          event.kind === 'text-delta' &&
+          prev?.kind === 'text-delta' &&
+          prev.parentId === event.parentId
+        ) {
+          prev.text += event.text;
+        } else {
+          record.events.push(event);
+        }
         schedulePersist(session);
       }
       switch (event.kind) {
@@ -1702,10 +1807,43 @@ async function submit(text: string): Promise<void> {
   }
 }
 
+/** Render a stored history lazily: only when its conversation first opens. */
+function hydrate(session: Session): void {
+  if (!session.pendingLog) return;
+  const log = session.pendingLog;
+  session.pendingLog = undefined;
+  replayLog(session, log);
+}
+
+/** Long histories replay only their tail; the rest loads on demand. */
+const REPLAY_WINDOW = 150;
+
 /** Rebuild a conversation's UI (and its sub-agent chats) from stored entries. */
-function replayLog(session: Session, log: ConversationEntry[]): void {
+function replayLog(session: Session, log: ConversationEntry[], full = false): void {
   session.log = log;
-  for (const entry of log) {
+  const entries = full || log.length <= REPLAY_WINDOW ? log : log.slice(-REPLAY_WINDOW);
+  if (entries.length < log.length) {
+    const item = el('li', 'load-earlier');
+    const btn = el('button', 'btn-ghost', `Show ${log.length - entries.length} earlier messages`);
+    btn.type = 'button';
+    btn.addEventListener('click', () => {
+      // Rebuild the whole thread from the full log through the same path.
+      session.thread.textContent = '';
+      delete session.thread.dataset.day;
+      session.tools.clear();
+      session.toolStarts.clear();
+      session.agents.clear();
+      for (const child of sessions.filter((c) => c.parentSessionId === session.id)) {
+        sessions.splice(sessions.indexOf(child), 1);
+      }
+      replayLog(session, log, true);
+      renderRecents();
+      scrollChat(true);
+    });
+    item.appendChild(btn);
+    session.thread.appendChild(item);
+  }
+  for (const entry of entries) {
     if (entry.kind === 'user') {
       addUserMessage(session, entry.text, entry.author, entry.ts);
       continue;
@@ -1801,12 +1939,14 @@ async function boot(): Promise<void> {
     const conv = conversationFor(info);
     const data = saved[info.id];
     // Older HTML-snapshot saves have no `log`; they start fresh (memory is
-    // preserved separately via the provider resume ids).
+    // preserved separately via the provider resume ids). Histories are only
+    // REPLAYED when their conversation first opens — boot stays fast.
     if (data && Array.isArray(data.log) && conv.turns === 0) {
-      replayLog(conv, data.log);
+      conv.pendingLog = data.log;
       conv.usage = data.usage;
       conv.lastActiveAt = data.lastActiveAt;
       conv.turns = data.turns;
+      conv.draft = data.draft;
     }
   }
   renderRecents();
