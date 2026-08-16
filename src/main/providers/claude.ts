@@ -37,7 +37,6 @@ export const claudeProvider: Provider = {
     cliBin: 'claude',
     cliPackages: ['@anthropic-ai/claude-code'],
     sdkPackages: ['@anthropic-ai/claude-agent-sdk'],
-    hostStateDir: '.claude',
     forwardedEnvKeys: ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'],
     // Claude Code refuses --dangerously-skip-permissions as root unless it
     // can tell it's sandboxed; the container is exactly that sandbox.

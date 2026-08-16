@@ -139,6 +139,43 @@ function armDelete(btn: HTMLButtonElement, fn: () => void | Promise<void>): void
   });
 }
 
+/** Bottom-corner toast for failures that must not stay invisible. */
+function showToast(message: string): void {
+  document.querySelector('.toast')?.remove();
+  const toast = el('div', 'toast', message);
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 6000);
+}
+
+/** Persist a conversation's structured log; failures surface as a toast. */
+function persistConversation(session: Session): void {
+  if (!session.agentId || !bridge) return;
+  void bridge
+    .convoSave(session.agentId, {
+      log: session.log,
+      usage: session.usage,
+      lastActiveAt: session.lastActiveAt,
+      turns: session.turns,
+    })
+    .catch((err: Error) => showToast(`Couldn't save "${session.title}": ${err.message}`));
+}
+
+const persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** Debounced mid-turn save so a crash loses seconds, not the whole exchange. */
+function schedulePersist(session: Session): void {
+  if (!session.agentId) return;
+  const key = session.agentId;
+  if (persistTimers.has(key)) return;
+  persistTimers.set(
+    key,
+    setTimeout(() => {
+      persistTimers.delete(key);
+      persistConversation(session);
+    }, 2000),
+  );
+}
+
 /** Brief success acknowledgment on a save button. */
 function flashSaved(btn: HTMLButtonElement): void {
   const label = btn.textContent;
@@ -163,9 +200,26 @@ function scrollChat(force = false): void {
 
 marked.setOptions({ gfm: true, breaks: false });
 
+// Chat markdown is remote-authored. Anchors get target/rel forced here, and
+// the delegated click handler below routes them to the system browser — a
+// link must never navigate the app window (it would inherit the IPC bridge).
+DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+  if (node.tagName === 'A') {
+    node.setAttribute('target', '_blank');
+    node.setAttribute('rel', 'noopener noreferrer');
+  }
+});
+
 function renderMd(src: string): string {
   return DOMPurify.sanitize(marked.parse(src, { async: false }));
 }
+
+document.addEventListener('click', (e) => {
+  const anchor = (e.target as HTMLElement).closest('a[href]') as HTMLAnchorElement | null;
+  if (!anchor) return;
+  e.preventDefault();
+  if (/^https?:\/\//i.test(anchor.href)) void bridge?.openExternal(anchor.href);
+});
 
 /* ---------- Harness status ---------- */
 
@@ -1571,6 +1625,7 @@ async function submit(text: string): Promise<void> {
   session.log.push({ kind: 'user', text: trimmed, author: USER_NAME, ts: Date.now() });
   const record: ConversationEntry = { kind: 'turn', ts: Date.now(), events: [] };
   session.log.push(record);
+  persistConversation(session); // the user's message is durable immediately
 
   const turn = addAssistantTurn(session, turnId);
   turn.setThinking(true, 'Contacting the harness…'); // no dead air before the first event
@@ -1579,6 +1634,7 @@ async function submit(text: string): Promise<void> {
       if (event.kind !== 'thinking') {
         event.ts = Date.now(); // wall-clock stamp survives into replays
         record.events.push(event);
+        schedulePersist(session);
       }
       switch (event.kind) {
         case 'thinking':
@@ -1641,15 +1697,8 @@ async function submit(text: string): Promise<void> {
     }
     syncComposer();
     renderRecents();
-    // Conversations are forever — persist the structured transcript.
-    if (session.agentId && bridge) {
-      void bridge.convoSave(session.agentId, {
-        log: session.log,
-        usage: session.usage,
-        lastActiveAt: session.lastActiveAt,
-        turns: session.turns,
-      });
-    }
+    // Conversations are forever — persist the completed turn.
+    persistConversation(session);
   }
 }
 

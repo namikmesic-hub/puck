@@ -113,6 +113,8 @@ export interface BridgeEventPayload {
 export interface PuckBridge {
   status(): Promise<HarnessStatus>;
   providers(): Promise<ProviderInfo[]>;
+  /** Open an http(s) link in the system browser (chat links never navigate the app). */
+  openExternal(url: string): Promise<void>;
   /** Begins a provider login (sign-in window opens); returns the authorize URL. */
   providerAuthStart(id: string): Promise<{ url: string }>;
   providerAuthLogout(id: string): Promise<void>;

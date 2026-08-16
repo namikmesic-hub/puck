@@ -15,6 +15,7 @@ import type { EnvironmentConfig, EnvironmentInfo } from '../harness/bridge';
 import { RUNNER_SOURCE } from './runner-source';
 import { providers, type Provider } from './providers';
 import { deleteSecret, loadSecret, saveSecret } from './secrets';
+import { readJson, writeJsonAtomic } from './jsonstore';
 
 interface StoredEnv extends EnvironmentConfig {
   id: string;
@@ -50,19 +51,20 @@ function storePath(): string {
 
 function load(): Store {
   if (!store) {
-    try {
-      store = JSON.parse(fs.readFileSync(storePath(), 'utf8')) as Store;
-    } catch {
-      store = { environments: [], activeEnvId: null };
-    }
+    store = readJson<Store>(storePath()) ?? { environments: [], activeEnvId: null };
   }
   return store;
 }
 
 function save(): void {
-  if (!store) return;
-  fs.mkdirSync(path.dirname(storePath()), { recursive: true });
-  fs.writeFileSync(storePath(), JSON.stringify(store, null, 2));
+  if (store) void writeJsonAtomic(storePath(), store);
+}
+
+/** Every fs/docker-touching operation must name an environment we manage. */
+function requireEnv(id: string): StoredEnv {
+  const env = load().environments.find((e) => e.id === id);
+  if (!env) throw new Error('Unknown environment');
+  return env;
 }
 
 export function containerName(id: string): string {
@@ -73,17 +75,29 @@ function expandHome(p: string): string {
   return p.startsWith('~') ? path.join(os.homedir(), p.slice(1)) : p;
 }
 
+/** A wedged Docker daemon must produce an error, not a forever-pending UI. */
 function docker(
   args: string[],
+  timeoutMs = 20_000,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const child = spawn('docker', args);
     let stdout = '';
     let stderr = '';
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      stderr = `docker ${args[0]} timed out after ${Math.round(timeoutMs / 1000)}s — is Docker running?`;
+    }, timeoutMs);
     child.stdout.on('data', (d) => (stdout += String(d)));
     child.stderr.on('data', (d) => (stderr = (stderr + String(d)).slice(-4000)));
-    child.on('error', (err) => resolve({ code: -1, stdout, stderr: String(err.message) }));
-    child.on('close', (code) => resolve({ code, stdout, stderr }));
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      resolve({ code: -1, stdout, stderr: String(err.message) });
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ code, stdout, stderr });
+    });
   });
 }
 
@@ -100,7 +114,9 @@ export async function runtimeStatus(id: string): Promise<'running' | 'stopped'> 
 /* ---------- Per-environment secrets (values encrypted at rest) ---------- */
 
 function secretsStoreName(id: string): string {
-  return `env-secrets-${id}.bin`;
+  // Ids are validated at the IPC boundary; basename() is defense in depth
+  // against path traversal ever reaching the secret store.
+  return path.basename(`env-secrets-${id}.bin`);
 }
 
 function envSecrets(id: string): Record<string, string> {
@@ -114,6 +130,7 @@ function envSecrets(id: string): Record<string, string> {
 }
 
 export async function secretSet(id: string, key: string, value: string): Promise<EnvironmentInfo[]> {
+  requireEnv(id);
   const cleaned = key.trim();
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(cleaned)) {
     throw new Error('Secret names must look like environment variable names (A-Z, 0-9, _).');
@@ -125,6 +142,7 @@ export async function secretSet(id: string, key: string, value: string): Promise
 }
 
 export async function secretDelete(id: string, key: string): Promise<EnvironmentInfo[]> {
+  requireEnv(id);
   const secrets = envSecrets(id);
   delete secrets[key];
   saveSecret(secretsStoreName(id), JSON.stringify(secrets));
@@ -177,6 +195,7 @@ export async function update(id: string, cfg: EnvironmentConfig): Promise<Enviro
 }
 
 export async function remove(id: string): Promise<EnvironmentInfo[]> {
+  requireEnv(id);
   await docker(['rm', '-f', containerName(id)]);
   await docker(['rmi', imageTag(id)]);
   deleteSecret(secretsStoreName(id));
@@ -226,7 +245,7 @@ async function doStart(id: string): Promise<EnvironmentInfo[]> {
     if (env.dockerfile?.trim()) {
       const ctx = fs.mkdtempSync(path.join(os.tmpdir(), 'puck-build-'));
       fs.writeFileSync(path.join(ctx, 'Dockerfile'), env.dockerfile);
-      const build = await docker(['build', '-t', imageTag(id), ctx]);
+      const build = await docker(['build', '-t', imageTag(id), ctx], 10 * 60_000);
       if (build.code !== 0) {
         throw new Error(`Docker build failed: ${build.stderr.trim().slice(-600)}`);
       }
@@ -248,11 +267,11 @@ async function doStart(id: string): Promise<EnvironmentInfo[]> {
         args.push('-e', `${key}=${value}`);
       }
     }
-    // Mount host CLI state (auth, session transcripts) when present.
-    for (const p of providers) {
-      const host = path.join(os.homedir(), p.container.hostStateDir);
-      if (fs.existsSync(host)) args.push('-v', `${host}:/root/${p.container.hostStateDir}`);
-    }
+    // Host CLI state dirs (~/.claude, ~/.codex) are deliberately NOT mounted:
+    // the container runs with full tool access, and a writable mount would let
+    // an agent plant host-side hooks/settings that execute outside the sandbox
+    // (and colima doesn't share $HOME anyway). Credentials arrive via docker
+    // cp below; transcripts/session state stay container-local.
     for (const key of FORWARDED_ENV) {
       if (process.env[key]) args.push('-e', `${key}=${process.env[key]}`);
     }
@@ -260,8 +279,9 @@ async function doStart(id: string): Promise<EnvironmentInfo[]> {
     for (const [key, value] of Object.entries({ ...(env.envVars ?? {}), ...envSecrets(id) })) {
       args.push('-e', `${key}=${value}`);
     }
-    args.push(image, 'sleep', 'infinity');
-    const r = await docker(args);
+    // `--` ends option parsing so a hostile image string can't become a flag.
+    args.push('--', image, 'sleep', 'infinity');
+    const r = await docker(args, 120_000);
     if (r.code !== 0) {
       throw new Error(r.stderr.trim() || 'docker run failed — is Docker running?');
     }
@@ -273,7 +293,7 @@ async function doStart(id: string): Promise<EnvironmentInfo[]> {
   await docker(['exec', containerName(id), 'mkdir', '-p', '/opt/puck']);
   if (env.autoInstall) {
     for (const script of [CLI_BOOTSTRAP, SDK_BOOTSTRAP]) {
-      const r = await docker(['exec', containerName(id), 'sh', '-lc', script]);
+      const r = await docker(['exec', containerName(id), 'sh', '-lc', script], 10 * 60_000);
       if (r.code !== 0) {
         throw new Error(`Environment bootstrap failed: ${r.stderr.trim().slice(-400)}`);
       }

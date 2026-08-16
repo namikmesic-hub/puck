@@ -2013,6 +2013,23 @@ svg {
   cursor: default;
 }
 
+/* Failure toast — save errors must never be invisible. */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 26px;
+  transform: translateX(-50%);
+  z-index: 100;
+  max-width: min(90vw, 560px);
+  background: var(--red);
+  color: var(--white);
+  font-size: 13px;
+  border-radius: 12px;
+  padding: 10px 18px;
+  box-shadow: 0 10px 30px rgba(160, 60, 50, 0.3);
+  animation: fade-in 0.15s ease;
+}
+
 /* ---------- Animations ---------- */
 
 @keyframes fade-up {

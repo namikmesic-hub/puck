@@ -7,9 +7,9 @@
  */
 
 import { app } from 'electron';
-import { readFileSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import type { HarnessEvent } from '../harness/types';
+import { readJson, writeJsonAtomic } from './jsonstore';
 import type { HarnessStatus } from '../harness/bridge';
 import * as agents from './agents';
 import * as envs from './environments';
@@ -22,22 +22,11 @@ export { providerInfos, requireProvider as provider } from './providers';
  * so this survives app restarts on disk.
  */
 const resumePath = () => path.join(app.getPath('userData'), 'puck-resume.json');
-function loadSessionMap(): Map<string, string> {
-  try {
-    return new Map(
-      Object.entries(JSON.parse(readFileSync(resumePath(), 'utf8')) as Record<string, string>),
-    );
-  } catch {
-    return new Map();
-  }
-}
-const sessionMap = loadSessionMap();
+const sessionMap = new Map<string, string>(
+  Object.entries(readJson<Record<string, string>>(resumePath()) ?? {}),
+);
 function saveSessionMap(): void {
-  try {
-    writeFileSync(resumePath(), JSON.stringify(Object.fromEntries(sessionMap)));
-  } catch {
-    // best effort — resume just starts fresh next launch
-  }
+  void writeJsonAtomic(resumePath(), Object.fromEntries(sessionMap));
 }
 
 /** turnId → envId, for routing interrupts to the right runner. */

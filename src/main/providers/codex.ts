@@ -34,7 +34,6 @@ export const codexProvider: Provider = {
     cliBin: 'codex',
     cliPackages: ['@openai/codex'],
     sdkPackages: ['@openai/codex-sdk'],
-    hostStateDir: '.codex',
     forwardedEnvKeys: ['OPENAI_API_KEY', 'CODEX_API_KEY'],
     containerEnv: {},
     credential: {

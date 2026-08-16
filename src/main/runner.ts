@@ -53,6 +53,16 @@ function ensure(envId: string): RunnerProc {
   const routes = new Map<string, (msg: RunnerMsg | null) => void>();
   const proc: RunnerProc = { child, routes };
 
+  // A dead exec (container gone, daemon stopped) must fail the turn, not the
+  // app: without these handlers an EPIPE on stdin is a process-fatal throw.
+  const fail = (): void => {
+    for (const route of routes.values()) route(null);
+    routes.clear();
+    if (runners.get(envId) === proc) runners.delete(envId);
+  };
+  child.on('error', fail);
+  child.stdin.on('error', fail);
+
   let buf = '';
   child.stdout.on('data', (chunk) => {
     buf += String(chunk);

@@ -8,10 +8,10 @@
  */
 
 import { app } from 'electron';
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { AgentConfig, AgentInfo } from '../harness/bridge';
 import { defaultProvider, providerById } from './providers';
+import { readJson, writeJsonAtomic } from './jsonstore';
 
 interface Store {
   agents: AgentConfig[];
@@ -26,11 +26,7 @@ function storePath(): string {
 
 function load(): Store {
   if (!store) {
-    try {
-      store = JSON.parse(fs.readFileSync(storePath(), 'utf8')) as Store;
-    } catch {
-      store = { agents: [], activeAgentId: null };
-    }
+    store = readJson<Store>(storePath()) ?? { agents: [], activeAgentId: null };
     if (!store.agents.length) {
       store.agents = [
         {
@@ -60,9 +56,7 @@ function load(): Store {
 }
 
 function save(): void {
-  if (!store) return;
-  fs.mkdirSync(path.dirname(storePath()), { recursive: true });
-  fs.writeFileSync(storePath(), JSON.stringify(store, null, 2));
+  if (store) void writeJsonAtomic(storePath(), store);
 }
 
 function sanitize(cfg: Omit<AgentConfig, 'id'>): Omit<AgentConfig, 'id'> {

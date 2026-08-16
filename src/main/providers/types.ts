@@ -52,8 +52,6 @@ export interface ContainerIntegration {
   cliPackages: string[];
   /** npm packages the runner agent needs under /opt/puck. */
   sdkPackages: string[];
-  /** $HOME dot-dir bind-mounted to /root/<dir> (CLI auth + transcripts). */
-  hostStateDir: string;
   /** Host env vars forwarded into the container at creation. */
   forwardedEnvKeys: string[];
   /** Env baked into the container at creation (e.g. IS_SANDBOX=1). */

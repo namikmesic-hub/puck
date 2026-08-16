@@ -4,6 +4,7 @@ import type { BridgeEventPayload, EnvironmentConfig, PuckBridge } from './harnes
 const bridge: PuckBridge = {
   status: () => ipcRenderer.invoke('harness:status'),
   providers: () => ipcRenderer.invoke('provider:list'),
+  openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
   agentList: () => ipcRenderer.invoke('agent:list'),
   agentCreate: (cfg) => ipcRenderer.invoke('agent:create', cfg),
   agentUpdate: (id, cfg) => ipcRenderer.invoke('agent:update', { id, cfg }),
