@@ -14,8 +14,17 @@
     "plugin:import/typescript"
   ],
   "parser": "@typescript-eslint/parser",
-  "ignorePatterns": [".webpack/", "out/", "dist/", "coverage/", "src/main/runner/runner.js"],
+  "ignorePatterns": [
+    ".webpack/",
+    "out/",
+    "dist/",
+    "coverage/",
+    "src/main/runner/runner.js"
+  ],
   "settings": {
-    "import/core-modules": ["raw-runner"]
+    "import/core-modules": [
+      "raw-runner",
+      "vitest/config"
+    ]
   }
 }

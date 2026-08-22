@@ -6,53 +6,13 @@
  * tracks per-session resume ids and in-flight turns for interruption.
  */
 
-import { app } from 'electron';
-import * as path from 'node:path';
 import type { HarnessEvent } from '../harness/types';
-import { readJson, writeJsonAtomic } from './jsonstore';
 import type { HarnessStatus } from '../harness/bridge';
 import * as agents from './agents';
 import * as envs from './environments';
 import * as runner from './runner';
-
-export { providerInfos, requireProvider as provider } from './providers';
-
-/**
- * agentId → provider-native session/thread id. Conversations are long-lived,
- * so this survives app restarts on disk.
- */
-const resumePath = () => path.join(app.getPath('userData'), 'puck-resume.json');
-const sessionMap = new Map<string, string>(
-  Object.entries(readJson<Record<string, string>>(resumePath()) ?? {}),
-);
-function saveSessionMap(): void {
-  void writeJsonAtomic(resumePath(), Object.fromEntries(sessionMap));
-}
-
-/** Resume ids are per agent AND environment — a rebuilt container has no
- *  transcripts, so its ids must die with it. */
-const resumeKeyOf = (agentId: string, envId: string) => `${agentId}@${envId}`;
-
-envs.onEnvReset((envId) => {
-  let changed = false;
-  for (const key of [...sessionMap.keys()]) {
-    // Scoped keys for this env die with its container; legacy un-scoped keys
-    // (pre-scoping) can't be attributed to an env, so they die too — safer
-    // to lose a resume than to wedge a conversation on a stale id.
-    if (key.endsWith(`@${envId}`) || !key.includes('@')) {
-      sessionMap.delete(key);
-      changed = true;
-    }
-  }
-  if (changed) saveSessionMap();
-});
-
-/** Provider errors that mean "this resume id no longer resolves". Claude
- *  reports a dead resume as an opaque `error_during_execution` before any
- *  content, so that counts too (the guard requires a resumed, content-free
- *  attempt — a genuine mid-work failure never matches). */
-const STALE_RESUME_RE =
-  /no conversation found|no rollout found|resume failed|failed to resume|(session|thread|conversation).{0,40}not found|unknown (session|thread)|does not exist|error_during_execution/i;
+import * as sessions from './session-registry';
+import { requireProvider } from './providers';
 
 /** turnId → routing info. `reqId` differs from `turnId` on a stale-resume
  *  retry so the two attempts can never cross-route runner messages. */
@@ -77,8 +37,8 @@ export async function* runTurn(
   turnId: string,
   agentId: string,
   prompt: string,
-): AsyncGenerator<HarnessEvent> {
-  const agent = agents.list().find((a) => a.id === agentId);
+): AsyncGenerator<HarnessEvent, void, undefined> {
+  const agent = agents.byId(agentId);
   const env = envs.activeEnv();
   const fail = (message: string): HarnessEvent[] => [
     { kind: 'error', message },
@@ -86,26 +46,27 @@ export async function* runTurn(
   ];
 
   if (!agent) {
-    for (const e of fail('This agent no longer exists. Open Settings and create one.')) yield e;
+    yield* fail('This agent no longer exists. Open Settings and create one.');
     return;
   }
   if (!env) {
-    for (const e of fail('No environment configured. Open Settings and create one.')) yield e;
+    yield* fail('No environment configured. Open Settings and create one.');
     return;
   }
   if ((await envs.runtimeStatus(env.id)) !== 'running') {
-    for (const e of fail(`Environment "${env.name}" is not running. Start it from Settings.`))
-      yield e;
+    yield* fail(`Environment "${env.name}" is not running. Start it from Settings.`);
     return;
   }
   if (activeTurns.has(turnId)) {
-    for (const e of fail(`Duplicate turn id ${turnId}.`)) yield e;
+    yield* fail(`Duplicate turn id ${turnId}.`);
     return;
   }
 
-  const key = resumeKeyOf(agent.id, env.id);
-  // Legacy fallback: pre-env-scoping maps were keyed by agent id alone.
-  const resume = sessionMap.get(key) ?? sessionMap.get(agent.id) ?? null;
+  const resume = sessions.resumeIdFor(agent.id, env.id);
+  // Compiled at turn time so schema/compile changes apply without re-saving
+  // the agent. Sparse: untouched agents compile to '{}'. The agent store
+  // only persists registry provider ids, so an unknown one is a real fault.
+  const settings = JSON.stringify(requireProvider(agent.provider).compileSettings(agent.options));
 
   try {
     // Attempt 0 resumes; if the provider reports the id no longer resolves
@@ -125,7 +86,8 @@ export async function* runTurn(
           provider: agent.provider,
           model: agent.model,
           systemPrompt: agent.systemPrompt,
-          thinking: agent.thinking,
+          thinking: agent.effort, // wire field name is frozen until the next rv bump
+          settings,
           advanced: agent.advanced,
           resume: attempt,
           prompt,
@@ -135,9 +97,7 @@ export async function* runTurn(
           // merely ATTEMPTED — the runner echoes it on done even when the
           // provider refused to resume it.
           if (stale || providerSessionId === attempt) return;
-          sessionMap.set(key, providerSessionId);
-          sessionMap.delete(agent.id); // retire the legacy key
-          saveSessionMap();
+          sessions.remember(agent.id, env.id, providerSessionId);
         },
       );
       for await (const event of events) {
@@ -146,12 +106,10 @@ export async function* runTurn(
           attempt !== null &&
           !sawContent &&
           event.kind === 'error' &&
-          STALE_RESUME_RE.test(event.message)
+          sessions.isStaleResumeError(event.message)
         ) {
           stale = true;
-          sessionMap.delete(key);
-          sessionMap.delete(agent.id);
-          saveSessionMap();
+          sessions.forget(agent.id, env.id);
           break; // abandon this attempt silently; retry fresh
         }
         yield event;

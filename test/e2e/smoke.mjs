@@ -51,17 +51,29 @@ try {
   page.on('pageerror', (e) => errors.push(e.message));
   await sleep(2500); // boot + conversation hydration
 
-  const state = await page.evaluate(() => ({
+  const state = await page.evaluate(async () => ({
     bridge: !!window.puck,
     composer: !!document.getElementById('prompt'),
     roster: document.querySelectorAll('.recent.agent-row').length,
+    // Round-trips a real IPC handler — catches unregistered-channel bugs.
+    status: await window.puck
+      .status()
+      .then((s) => typeof s.connected === 'boolean')
+      .catch(() => false),
   }));
+  await page.click('#open-settings');
+  await page.waitForSelector('#settings-overlay:not(.hidden)', { timeout: 2000 }).catch(() => {
+    throw new Error('settings modal did not open');
+  });
+  await page.waitForTimeout(400); // let the section renders surface any page errors
+  await page.keyboard.press('Escape');
   await browser.close();
 
   if (!state.bridge) throw new Error('preload bridge missing');
   if (!state.composer) throw new Error('composer missing');
+  if (!state.status) throw new Error('harness:status round-trip failed');
   if (errors.length) throw new Error(`page errors: ${errors.join(' | ')}`);
-  console.log(`smoke OK — bridge up, composer rendered, ${state.roster} agents listed`);
+  console.log(`smoke OK — bridge + status up, settings modal opens, ${state.roster} agents listed`);
 } finally {
   kill();
 }

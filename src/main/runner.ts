@@ -7,9 +7,35 @@
  * keeps this working across Docker runtimes (Docker Desktop, colima, …).
  */
 
-import { spawn, ChildProcess } from 'node:child_process';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { HarnessEvent } from '../harness/types';
-import { containerName } from './environments';
+
+/**
+ * Transport seam: how to open a stdio exec into an environment's runner.
+ * The composition root (src/index.ts) wires the docker adapter from
+ * environments.ts; tests inject a scripted fake. Keeping Docker knowledge
+ * out of this module lets the NDJSON bridge be tested as pure concurrency.
+ */
+export type ExecSpawner = (envId: string) => ChildProcessWithoutNullStreams;
+
+let spawnExec: ExecSpawner = () => {
+  throw new Error('runner: no exec spawner wired (composition root not initialized)');
+};
+
+export function useExecSpawner(fn: ExecSpawner): void {
+  spawnExec = fn;
+}
+
+/**
+ * Wire contract with the container runner. runner.js (which cannot import
+ * host code) declares the same values as `OP`/`RV`; the sync is enforced by
+ * test/unit/runner-source.test.ts.
+ */
+export const WIRE = {
+  ops: { turn: 'turn', interrupt: 'interrupt', answer: 'answer' },
+  /** Protocol revision: 2 = the runner understands the compiled `settings` field. */
+  rv: 2,
+} as const;
 
 export interface TurnRequest {
   id: string;
@@ -17,7 +43,12 @@ export interface TurnRequest {
   model: string;
   systemPrompt: string;
   thinking: string;
-  /** JSON object string merged into the provider SDK options. */
+  /**
+   * JSON of the compiled provider-settings fragment (host-side
+   * `compileSettings` output), applied by the runner before `advanced`.
+   */
+  settings: string;
+  /** JSON object string merged into the provider SDK options LAST. */
   advanced: string;
   resume: string | null;
   prompt: string;
@@ -31,15 +62,24 @@ interface RunnerMsg {
   /** Eager resume-id report, sent as soon as the SDK announces the session. */
   session?: string;
   ready?: boolean;
+  /** Runner protocol revision (absent = 1). 2+ understands `settings`. */
+  rv?: number;
 }
 
 interface RunnerProc {
-  child: ChildProcess;
+  child: ChildProcessWithoutNullStreams;
   routes: Map<string, (msg: RunnerMsg | null) => void>;
   /** Last ~8KB of container stderr — the only diagnostics on failure. */
   stderrTail: string;
   /** Resolves on the runner's `{ready:true}` handshake; rejects on death. */
   ready: Promise<void>;
+  /** Protocol revision reported by the ready handshake (old runners: 1). */
+  rv: number;
+}
+
+/** One NDJSON frame to the runner; frames are the whole wire protocol. */
+function send(proc: RunnerProc, msg: Record<string, unknown>): void {
+  proc.child.stdin?.write(JSON.stringify(msg) + '\n');
 }
 
 const runners = new Map<string, RunnerProc>();
@@ -51,9 +91,7 @@ function ensure(envId: string): RunnerProc {
   }
   runners.delete(envId);
 
-  const child = spawn('docker', [
-    'exec', '-i', containerName(envId), 'node', '/opt/puck/runner.js',
-  ]);
+  const child = spawnExec(envId);
   const routes = new Map<string, (msg: RunnerMsg | null) => void>();
   let readyResolve!: () => void;
   let readyReject!: (err: Error) => void;
@@ -62,7 +100,7 @@ function ensure(envId: string): RunnerProc {
     readyReject = reject;
   });
   ready.catch(() => undefined); // observed via await in turn(); avoid unhandled
-  const proc: RunnerProc = { child, routes, stderrTail: '', ready };
+  const proc: RunnerProc = { child, routes, stderrTail: '', ready, rv: 1 };
   const readyTimer = setTimeout(() => {
     readyReject(new Error('runner did not report ready within 15s'));
   }, 15_000);
@@ -90,6 +128,7 @@ function ensure(envId: string): RunnerProc {
       try {
         const msg = JSON.parse(line) as RunnerMsg;
         if (msg.ready) {
+          proc.rv = msg.rv ?? 1;
           clearTimeout(readyTimer);
           readyResolve();
         }
@@ -136,6 +175,15 @@ export async function* turn(
     yield { kind: 'turn-end', stats: endStats };
     return;
   }
+  // A container started before an app update keeps its old runner.js until
+  // the environment restarts; an old runner silently ignores `settings`.
+  if (proc.rv < WIRE.rv && req.settings && req.settings !== '{}') {
+    yield {
+      kind: 'error',
+      message:
+        'This environment is running an older Puck runner that ignores agent option settings. Restart the environment from Settings to apply them.',
+    };
+  }
 
   const queue: Array<RunnerMsg | null> = [];
   let wake: (() => void) | null = null;
@@ -152,9 +200,10 @@ export async function* turn(
     if (!sawMessage) proc.routes.get(req.id)?.(null);
   }, 90_000);
 
-  proc.child.stdin?.write(JSON.stringify({ op: 'turn', ...req }) + '\n');
+  send(proc, { op: WIRE.ops.turn, ...req });
 
   let done = false;
+  let sawTurnEnd = false;
   try {
     for (;;) {
       if (!queue.length) await new Promise<void>((resolve) => (wake = resolve));
@@ -170,10 +219,17 @@ export async function* turn(
         }
         sawMessage = true;
         if (msg.session) onSession(msg.session);
-        if (msg.event) yield msg.event;
+        if (msg.event) {
+          if (msg.event.kind === 'turn-end') sawTurnEnd = true;
+          yield msg.event;
+        }
         if (msg.done) {
           if (msg.providerSessionId) onSession(msg.providerSessionId);
           done = true;
+          // turn-end is the protocol's only terminal event; a runner that
+          // reports done without one (old runners' dispatch error path)
+          // would otherwise lock the conversation's composer forever.
+          if (!sawTurnEnd) yield { kind: 'turn-end', stats: endStats };
           return;
         }
       }
@@ -185,7 +241,7 @@ export async function* turn(
     // stop the container-side work instead of letting it run invisibly.
     if (!done && proc.child.exitCode === null && !proc.child.killed) {
       try {
-        proc.child.stdin?.write(JSON.stringify({ op: 'interrupt', id: req.id }) + '\n');
+        send(proc, { op: WIRE.ops.interrupt, id: req.id });
       } catch {
         // stdin already gone — nothing left to stop
       }
@@ -196,7 +252,7 @@ export async function* turn(
 export function interrupt(envId: string, turnId: string): void {
   const proc = runners.get(envId);
   if (proc && proc.child.exitCode === null) {
-    proc.child.stdin?.write(JSON.stringify({ op: 'interrupt', id: turnId }) + '\n');
+    send(proc, { op: WIRE.ops.interrupt, id: turnId });
   }
 }
 
@@ -208,7 +264,7 @@ export function answerAsk(
 ): void {
   const proc = runners.get(envId);
   if (proc && proc.child.exitCode === null) {
-    proc.child.stdin?.write(JSON.stringify({ op: 'answer', id: turnId, askId, answers }) + '\n');
+    send(proc, { op: WIRE.ops.answer, id: turnId, askId, answers });
   }
 }
 

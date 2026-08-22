@@ -6,16 +6,19 @@
  * with a host directory mounted at /workspace. Config persists in userData.
  */
 
-import { app } from 'electron';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { EnvironmentConfig, EnvironmentInfo } from '../harness/bridge';
 import { RUNNER_SOURCE } from './runner-source';
+import { detach as detachRunner } from './runner';
+import { docker, dockerOrThrow } from './docker-client';
+import { requireSecretKey } from './ipcguard';
+import { bootstrapPlan } from './provisioning';
 import { providers, type Provider } from './providers';
 import { deleteSecret, loadSecret, saveSecret } from './secrets';
-import { readJson, writeJsonAtomic } from './jsonstore';
+import { defineStore } from './store';
 
 interface StoredEnv extends EnvironmentConfig {
   id: string;
@@ -29,36 +32,21 @@ interface Store {
 /** Host auth material forwarded into containers at creation time. */
 const FORWARDED_ENV = providers.flatMap((p) => p.container.forwardedEnvKeys);
 
-// CLIs for interactive use (docker exec -it … codex login), SDKs for the
-// runner agent under /opt/puck. Derived from the provider registry.
-const CLI_BOOTSTRAP =
-  providers.map((p) => `command -v ${p.container.cliBin} >/dev/null 2>&1`).join(' && ') +
-  ' || npm install -g ' +
-  providers.flatMap((p) => p.container.cliPackages).join(' ');
-const SDK_BOOTSTRAP =
-  providers
-    .flatMap((p) => p.container.sdkPackages)
-    .map((pkg) => `[ -d /opt/puck/node_modules/${pkg} ]`)
-    .join(' && ') +
-  ' || npm install --prefix /opt/puck ' +
-  providers.flatMap((p) => p.container.sdkPackages).join(' ');
-
-let store: Store | null = null;
-
-function storePath(): string {
-  return path.join(app.getPath('userData'), 'puck-environments.json');
-}
-
-function load(): Store {
-  if (!store) {
-    store = readJson<Store>(storePath()) ?? { environments: [], activeEnvId: null };
-  }
-  return store;
-}
-
-function save(): void {
-  if (store) void writeJsonAtomic(storePath(), store);
-}
+const store = defineStore<Store>({
+  file: 'puck-environments.json',
+  defaults: () => ({ environments: [], activeEnvId: null }),
+  // Records written before Dockerfile / env-var support lack those fields.
+  migrate: (raw) => ({
+    ...raw,
+    environments: raw.environments.map((e) => ({
+      ...e,
+      dockerfile: e.dockerfile ?? '',
+      envVars: e.envVars ?? {},
+    })),
+  }),
+});
+const load = store.read;
+const save = store.persist;
 
 /** Every fs/docker-touching operation must name an environment we manage. */
 function requireEnv(id: string): StoredEnv {
@@ -71,34 +59,16 @@ export function containerName(id: string): string {
   return `puck-env-${id}`;
 }
 
-function expandHome(p: string): string {
-  return p.startsWith('~') ? path.join(os.homedir(), p.slice(1)) : p;
+/**
+ * Stdio exec into an environment's runner — the transport adapter the
+ * composition root hands to runner.ts (`useExecSpawner`).
+ */
+export function runnerExecSpawner(envId: string): ChildProcessWithoutNullStreams {
+  return spawn('docker', ['exec', '-i', containerName(envId), 'node', '/opt/puck/runner.js']);
 }
 
-/** A wedged Docker daemon must produce an error, not a forever-pending UI. */
-function docker(
-  args: string[],
-  timeoutMs = 20_000,
-): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = spawn('docker', args);
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      stderr = `docker ${args[0]} timed out after ${Math.round(timeoutMs / 1000)}s — is Docker running?`;
-    }, timeoutMs);
-    child.stdout.on('data', (d) => (stdout += String(d)));
-    child.stderr.on('data', (d) => (stderr = (stderr + String(d)).slice(-4000)));
-    child.on('error', (err) => {
-      clearTimeout(timer);
-      resolve({ code: -1, stdout, stderr: String(err.message) });
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolve({ code, stdout, stderr });
-    });
-  });
+function expandHome(p: string): string {
+  return p.startsWith('~') ? path.join(os.homedir(), p.slice(1)) : p;
 }
 
 async function containerState(id: string): Promise<'running' | 'stopped' | 'missing'> {
@@ -129,33 +99,34 @@ function envSecrets(id: string): Record<string, string> {
   }
 }
 
-export async function secretSet(id: string, key: string, value: string): Promise<EnvironmentInfo[]> {
-  requireEnv(id);
-  const cleaned = key.trim();
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(cleaned)) {
-    throw new Error('Secret names must look like environment variable names (A-Z, 0-9, _).');
-  }
-  const secrets = envSecrets(id);
-  secrets[cleaned] = value;
-  saveSecret(secretsStoreName(id), JSON.stringify(secrets));
-  if ((await runtimeStatus(id)) === 'running') await injectSecretsFile(id);
-  return list();
+export function secretSet(id: string, key: string, value: string): Promise<EnvironmentInfo[]> {
+  return withEnvLock(id, async () => {
+    requireEnv(id);
+    const secrets = envSecrets(id);
+    secrets[requireSecretKey(key)] = value;
+    await writeSecrets(id, secrets);
+    return list();
+  });
 }
 
-export async function secretDelete(id: string, key: string): Promise<EnvironmentInfo[]> {
-  requireEnv(id);
-  const secrets = envSecrets(id);
-  delete secrets[key];
+export function secretDelete(id: string, key: string): Promise<EnvironmentInfo[]> {
+  return withEnvLock(id, async () => {
+    requireEnv(id);
+    const secrets = envSecrets(id);
+    delete secrets[key];
+    await writeSecrets(id, secrets);
+    return list();
+  });
+}
+
+async function writeSecrets(id: string, secrets: Record<string, string>): Promise<void> {
   saveSecret(secretsStoreName(id), JSON.stringify(secrets));
   if ((await runtimeStatus(id)) === 'running') await injectSecretsFile(id);
-  return list();
 }
 
 async function toInfo(env: StoredEnv): Promise<EnvironmentInfo> {
   return {
     ...env,
-    dockerfile: env.dockerfile ?? '',
-    envVars: env.envVars ?? {},
     status: await runtimeStatus(env.id),
     active: env.id === load().activeEnvId,
     secretKeys: Object.keys(envSecrets(env.id)).sort(),
@@ -173,8 +144,8 @@ function sanitize(cfg: EnvironmentConfig, id: string): Omit<StoredEnv, 'id'> {
     workspacePath:
       cfg.workspacePath.trim() || path.join(os.homedir(), 'puck-workspaces', id),
     autoInstall: cfg.autoInstall,
-    dockerfile: cfg.dockerfile ?? '',
-    envVars: cfg.envVars ?? {},
+    dockerfile: cfg.dockerfile,
+    envVars: cfg.envVars,
   };
 }
 
@@ -200,19 +171,30 @@ function imageTag(id: string): string {
   return `puck-img-${id}`;
 }
 
-/** Notified when an environment's container state is destroyed (rebuild /
- *  remove) — the backend drops that environment's resume ids. */
-let onReset: ((envId: string) => void) | null = null;
+/** Subscribers notified when an environment's container state is destroyed
+ *  (rebuild / remove) — e.g. the session registry drops its resume ids. */
+const resetSubscribers: Array<(envId: string) => void> = [];
 export function onEnvReset(cb: (envId: string) => void): void {
-  onReset = cb;
+  resetSubscribers.push(cb);
+}
+function notifyReset(envId: string): void {
+  for (const cb of resetSubscribers) cb(envId);
 }
 
 // One mutex per environment across ALL lifecycle ops: a queued start must
 // not resurrect a just-deleted container, and rm must not race a doStart.
+// Every op first detaches the env's runner exec — a live runner must not
+// outlive its container state, and the next turn's runner picks up new
+// secrets / a redeployed runner.js.
 const envLocks = new Map<string, Promise<unknown>>();
 function withEnvLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
   const prev = envLocks.get(id) ?? Promise.resolve();
-  const task = prev.catch(() => undefined).then(fn);
+  const task = prev
+    .catch(() => undefined)
+    .then(() => {
+      detachRunner(id);
+      return fn();
+    });
   envLocks.set(id, task);
   void task.catch(() => undefined).finally(() => {
     if (envLocks.get(id) === task) envLocks.delete(id);
@@ -246,7 +228,7 @@ export function rebuild(id: string): Promise<EnvironmentInfo[]> {
     requireEnv(id);
     await doStop(id); // adopts rotated credentials; ignores not-running
     await docker(['rm', '-f', containerName(id)]);
-    onReset?.(id); // container transcripts are gone — resume ids with them
+    notifyReset(id); // container transcripts are gone — resume ids with them
     return doStart(id);
   });
 }
@@ -261,20 +243,19 @@ export function remove(id: string): Promise<EnvironmentInfo[]> {
     s.environments = s.environments.filter((e) => e.id !== id);
     if (s.activeEnvId === id) s.activeEnvId = s.environments[0]?.id ?? null;
     save();
-    onReset?.(id);
+    notifyReset(id);
     return list();
   });
 }
 
 async function doStart(id: string): Promise<EnvironmentInfo[]> {
-  const env = load().environments.find((e) => e.id === id);
-  if (!env) throw new Error('Unknown environment');
+  const env = requireEnv(id);
 
   const state = await containerState(id);
   if (state === 'missing') {
     // Build the per-environment image when a Dockerfile is configured.
     let image = env.image;
-    if (env.dockerfile?.trim()) {
+    if (env.dockerfile.trim()) {
       const ctx = fs.mkdtempSync(path.join(os.tmpdir(), 'puck-build-'));
       fs.writeFileSync(path.join(ctx, 'Dockerfile'), env.dockerfile);
       const build = await docker(['build', '-t', imageTag(id), ctx], 10 * 60_000);
@@ -310,7 +291,7 @@ async function doStart(id: string): Promise<EnvironmentInfo[]> {
     // User-configured env vars. Secrets deliberately do NOT go through -e:
     // docker inspect would expose them forever — they travel as a root-only
     // file the runner applies to its own environment (injectSecretsFile).
-    for (const [key, value] of Object.entries(env.envVars ?? {})) {
+    for (const [key, value] of Object.entries(env.envVars)) {
       args.push('-e', `${key}=${value}`);
     }
     // `--` ends option parsing so a hostile image string can't become a flag.
@@ -324,13 +305,14 @@ async function doStart(id: string): Promise<EnvironmentInfo[]> {
     if (r.code !== 0) throw new Error(r.stderr.trim() || 'docker start failed');
   }
 
-  await docker(['exec', containerName(id), 'mkdir', '-p', '/opt/puck']);
+  await dockerOrThrow(['exec', containerName(id), 'mkdir', '-p', '/opt/puck'], 'Environment setup failed');
   if (env.autoInstall) {
-    for (const script of [CLI_BOOTSTRAP, SDK_BOOTSTRAP]) {
-      const r = await docker(['exec', containerName(id), 'sh', '-lc', script], 10 * 60_000);
-      if (r.code !== 0) {
-        throw new Error(`Environment bootstrap failed: ${r.stderr.trim().slice(-400)}`);
-      }
+    for (const script of bootstrapPlan(providers)) {
+      await dockerOrThrow(
+        ['exec', containerName(id), 'sh', '-lc', script],
+        'Environment bootstrap failed',
+        10 * 60_000,
+      );
     }
   }
 
@@ -341,20 +323,12 @@ async function doStart(id: string): Promise<EnvironmentInfo[]> {
     const cred = p.container.credential;
     if (!fs.existsSync(cred.hostPath)) continue;
     const dest = path.posix.dirname(cred.containerPath) + '/';
-    await docker(['exec', containerName(id), 'mkdir', '-p', dest]);
-    await docker(['cp', cred.hostPath, `${containerName(id)}:${dest}`]);
+    await dockerOrThrow(['exec', containerName(id), 'mkdir', '-p', dest], `${p.label} credential setup failed`);
+    await dockerOrThrow(['cp', cred.hostPath, `${containerName(id)}:${dest}`], `${p.label} credential copy failed`);
   }
 
   // Deploy (or refresh) the runner agent.
-  const runnerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'puck-runner-'));
-  try {
-    const runnerTmp = path.join(runnerDir, 'runner.js');
-    fs.writeFileSync(runnerTmp, RUNNER_SOURCE, { mode: 0o600 });
-    const cp = await docker(['cp', runnerTmp, `${containerName(id)}:/opt/puck/runner.js`]);
-    if (cp.code !== 0) throw new Error(`Runner deploy failed: ${cp.stderr.trim().slice(-400)}`);
-  } finally {
-    fs.rmSync(runnerDir, { recursive: true, force: true });
-  }
+  await copyIntoContainer(id, RUNNER_SOURCE, '/opt/puck/runner.js', 'Runner deploy failed');
 
   await injectSecretsFile(id);
   // Puck-managed OAuth tokens win over host files when fresher.
@@ -362,18 +336,33 @@ async function doStart(id: string): Promise<EnvironmentInfo[]> {
   return list();
 }
 
-/** Environment secrets as a root-only container file (never docker argv). */
-async function injectSecretsFile(id: string): Promise<void> {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'puck-secrets-'));
+/**
+ * Ship `content` into the container via a root-only host temp file and
+ * `docker cp` — the only way secrets and credentials travel (never argv, never
+ * a bind mount). Callers create the destination directory first if needed.
+ */
+async function copyIntoContainer(
+  id: string,
+  content: string,
+  containerPath: string,
+  what: string,
+): Promise<void> {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'puck-cp-'));
   try {
-    const tmp = path.join(tmpDir, 'secrets.json');
-    fs.writeFileSync(tmp, JSON.stringify(envSecrets(id)), { mode: 0o600 });
-    await docker(['exec', containerName(id), 'mkdir', '-p', '/opt/puck']);
-    await docker(['cp', tmp, `${containerName(id)}:/opt/puck/secrets.json`]);
-    await docker(['exec', containerName(id), 'chmod', '600', '/opt/puck/secrets.json']);
+    const tmp = path.join(tmpDir, path.posix.basename(containerPath));
+    fs.writeFileSync(tmp, content, { mode: 0o600 });
+    await dockerOrThrow(['cp', tmp, `${containerName(id)}:${containerPath}`], what);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
+}
+
+/** Environment secrets as a root-only container file (never docker argv). */
+async function injectSecretsFile(id: string): Promise<void> {
+  const what = 'Secrets injection failed';
+  await dockerOrThrow(['exec', containerName(id), 'mkdir', '-p', '/opt/puck'], what);
+  await copyIntoContainer(id, JSON.stringify(envSecrets(id)), '/opt/puck/secrets.json', what);
+  await dockerOrThrow(['exec', containerName(id), 'chmod', '600', '/opt/puck/secrets.json'], what);
 }
 
 /**
@@ -390,15 +379,11 @@ async function injectCredentials(id: string, p: Provider): Promise<void> {
     cred.adoptIfNewer(existing.stdout);
     if (!snapshot.supersedes(existing.stdout)) return;
   }
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'puck-cred-'));
-  try {
-    const tmp = path.join(tmpDir, 'cred.json');
-    fs.writeFileSync(tmp, snapshot.content, { mode: 0o600 });
-    await docker(['exec', containerName(id), 'mkdir', '-p', path.posix.dirname(cred.containerPath)]);
-    await docker(['cp', tmp, `${containerName(id)}:${cred.containerPath}`]);
-  } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  }
+  await dockerOrThrow(
+    ['exec', containerName(id), 'mkdir', '-p', path.posix.dirname(cred.containerPath)],
+    `${p.label} credential setup failed`,
+  );
+  await copyIntoContainer(id, snapshot.content, cred.containerPath, `${p.label} credential copy failed`);
 }
 
 /** Push freshly obtained credentials into every running environment. */

@@ -1,0 +1,48 @@
+{
+  "v": 1,
+  "log": [
+    { "kind": "user", "text": "Run the tests please", "author": "user", "ts": 1755500000000 },
+    {
+      "kind": "turn",
+      "ts": 1755500001000,
+      "events": [
+        { "kind": "text-delta", "text": "Running the suite now.", "ts": 1755500002000 },
+        {
+          "kind": "tool-start",
+          "toolId": "t1",
+          "tool": "Bash",
+          "summary": "npm test",
+          "input": "npm test",
+          "ts": 1755500003000
+        },
+        { "kind": "tool-end", "toolId": "t1", "ok": true, "output": "10 passed", "ts": 1755500009000 },
+        {
+          "kind": "ask",
+          "askId": "a1",
+          "questions": [
+            {
+              "question": "Ship it?",
+              "header": "Release",
+              "multiSelect": false,
+              "options": [
+                { "label": "Yes", "description": "Tag and push" },
+                { "label": "No", "description": "Hold off" }
+              ]
+            }
+          ],
+          "answers": { "Ship it?": "Yes" },
+          "ts": 1755500010000
+        },
+        { "kind": "mystery-future-event", "ts": 1755500010500 },
+        {
+          "kind": "turn-end",
+          "stats": { "inputTokens": 1200, "outputTokens": 340, "durationMs": 9000 },
+          "ts": 1755500011000
+        }
+      ]
+    }
+  ],
+  "lastTurnTokens": 1540,
+  "lastActiveAt": 1755500011000,
+  "turns": 1
+}

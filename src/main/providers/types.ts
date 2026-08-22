@@ -8,12 +8,13 @@
  *  - auth: the OAuth login lifecycle
  *  - container: how the provider is installed into and authenticated inside
  *    environment containers
- *  - execution: lives container-side in runner-source.ts as the PROVIDERS
+ *  - execution: lives container-side in runner/runner.js as the PROVIDERS
  *    table — the hand-synced mirror of this interface (TypeScript cannot
  *    reach into the embedded runner string)
  */
 
 import type { ProviderCapabilities } from '../../harness/bridge';
+import type { ProviderOption, SettingsMap } from '../../harness/options';
 
 /** Login + token lifecycle for one provider account. */
 export interface ProviderAuth {
@@ -69,7 +70,14 @@ export interface Provider {
   readonly thinkingLevels: string[];
   /** Agent-editor hint: where the system prompt lands for this provider. */
   readonly systemPromptHint: string;
+  /** Schema-driven per-agent options rendered generically by the agent editor. */
+  readonly configOptions: readonly ProviderOption[];
   readonly capabilities: ProviderCapabilities;
   readonly auth: ProviderAuth;
   readonly container: ContainerIntegration;
+  /**
+   * Sparse validated settings → the exact SDK options (Claude) / config
+   * (Codex) fragment the runner applies before the `advanced` passthrough.
+   */
+  compileSettings(settings: SettingsMap): SettingsMap;
 }

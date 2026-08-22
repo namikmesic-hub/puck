@@ -45,7 +45,6 @@
   },
   "dependencies": {
     "dompurify": "^3.4.13",
-    "electron-squirrel-startup": "^1.0.1",
     "marked": "^18.0.9"
   }
 }

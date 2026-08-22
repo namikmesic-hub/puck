@@ -7,6 +7,7 @@
  */
 
 import type { HarnessEvent } from './types';
+import type { ProviderOption } from './options';
 
 export interface HarnessStatus {
   /** True when an environment is selected and its container is running. */
@@ -20,15 +21,25 @@ export interface HarnessStatus {
 export interface AgentConfig {
   id: string;
   name: string;
-  /** Provider id: "claude-code" | "codex". */
+  /** Provider id from the registry (src/main/providers). */
   provider: string;
   /** Provider model id, or "auto" for the provider default. */
   model: string;
   /** System instructions (Claude: appended to the harness preset; Codex: sent at thread start). */
   systemPrompt: string;
-  /** Thinking/effort level, or "auto" for the provider default. */
-  thinking: string;
-  /** JSON object merged into the provider SDK options — full API surface passthrough. */
+  /** Reasoning-effort level, or "auto" for the provider default. */
+  effort: string;
+  /**
+   * Sparse per-provider option overrides, keyed by `ProviderOption.id` and
+   * validated against the provider's `configOptions` schema on save.
+   * (On disk, legacy records may still carry the old `settings`/`thinking`
+   * keys — the agent store dual-reads them at load.)
+   */
+  options: Record<string, unknown>;
+  /**
+   * JSON object merged into the provider SDK options LAST — the untyped
+   * escape hatch that overrides compiled `settings`.
+   */
   advanced: string;
 }
 
@@ -84,6 +95,8 @@ export interface ProviderInfo {
   thinkingLevels: string[];
   /** Agent-editor hint: where the system prompt lands for this provider. */
   systemPromptHint: string;
+  /** Schema the agent editor renders as the per-provider options form. */
+  configOptions: ProviderOption[];
   capabilities: ProviderCapabilities;
   auth: ProviderAuthInfo;
 }
@@ -97,10 +110,19 @@ export type ConversationEntry =
  * Persisted transcript of an agent's long-lived conversation. Stored as
  * structured entries (not HTML) so restarts rebuild live UI — clickable turn
  * cards, tool cards, sub-agent chats — by replaying through the renderer.
+ *
+ * The persisted event dialect differs from the live wire: text-deltas are
+ * merged into one, `thinking` events are dropped, and `ts` is stamped by the
+ * renderer. Replay silently skips unknown kinds, so event shapes in `log`
+ * are append-only — new kinds are fine, changing an existing kind's shape
+ * requires bumping `v` and adding a read-side migration.
  */
 export interface ConversationData {
+  /** Persisted-format version; absent in pre-versioning saves (treated as 1). */
+  v?: number;
   log: ConversationEntry[];
-  usage: number;
+  /** Token total (input+output) of the LAST turn — not cumulative. */
+  lastTurnTokens: number;
   lastActiveAt: number;
   turns: number;
   /** Composer draft, restored with the conversation. */

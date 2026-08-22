@@ -35,6 +35,7 @@ export function toInfo(provider: Provider): ProviderInfo {
     models: provider.models,
     thinkingLevels: provider.thinkingLevels,
     systemPromptHint: provider.systemPromptHint,
+    configOptions: [...provider.configOptions],
     capabilities: provider.capabilities,
     auth: provider.auth.status(),
   };

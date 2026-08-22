@@ -25,15 +25,20 @@ describe('provider registry', () => {
       expect(info.models[0]).toBe('auto');
       expect(info.thinkingLevels[0]).toBe('auto');
       expect(info.systemPromptHint.length).toBeGreaterThan(0);
+      expect(info.configOptions.length).toBeGreaterThan(0);
       expect(typeof info.capabilities.supportsAsk).toBe('boolean');
       expect(typeof info.auth.connected).toBe('boolean');
     }
   });
 
+  it('codex advertises the current reasoning levels', () => {
+    expect(providerById('codex')?.thinkingLevels).toContain('xhigh');
+  });
+
   it('toInfo never leaks auth methods or container internals', () => {
     const info = toInfo(providers[0]);
     expect(Object.keys(info).sort()).toEqual(
-      ['auth', 'capabilities', 'id', 'label', 'models', 'systemPromptHint', 'thinkingLevels'].sort(),
+      ['auth', 'capabilities', 'configOptions', 'id', 'label', 'models', 'systemPromptHint', 'thinkingLevels'].sort(),
     );
   });
 

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { agentConfigFrom, envConfigFrom, requireId } from '../../src/main/ipcguard';
+import {
+  agentConfigFrom,
+  convoDataFrom,
+  envConfigFrom,
+  requireId,
+  requireSecretKey,
+} from '../../src/main/ipcguard';
 
 describe('requireId', () => {
   it('accepts ids we mint', () => {
@@ -37,5 +43,52 @@ describe('agentConfigFrom', () => {
     const cfg = agentConfigFrom({ name: 'A', provider: 'codex' });
     expect(cfg.model).toBe('auto');
     expect(cfg.systemPrompt).toBe('');
+    expect(cfg.options).toEqual({});
+  });
+
+  it('passes object options through and defaults garbage to {}', () => {
+    expect(agentConfigFrom({ options: { maxTurns: 3 } }).options).toEqual({ maxTurns: 3 });
+    expect(agentConfigFrom({ options: [1, 2] }).options).toEqual({});
+    expect(agentConfigFrom({ options: 'x' }).options).toEqual({});
+    expect(agentConfigFrom({ options: null }).options).toEqual({});
+  });
+});
+
+describe('requireSecretKey', () => {
+  it('accepts env-var-shaped keys and rejects everything else', () => {
+    expect(requireSecretKey('API_KEY')).toBe('API_KEY');
+    expect(requireSecretKey('_x9')).toBe('_x9');
+    expect(() => requireSecretKey('9lives')).toThrow();
+    expect(() => requireSecretKey('BAD-KEY')).toThrow();
+    expect(() => requireSecretKey('')).toThrow();
+    expect(() => requireSecretKey(42)).toThrow();
+  });
+});
+
+describe('convoDataFrom', () => {
+  const turn = { kind: 'turn', ts: 5, events: [{ kind: 'text-delta', text: 'hi' }] };
+  const user = { kind: 'user', text: 'hello', author: 'user', ts: 4 };
+
+  it('round-trips a valid payload and coerces the numeric fields', () => {
+    const out = convoDataFrom({ log: [user, turn], lastTurnTokens: 'x', lastActiveAt: 9, turns: 1 });
+    expect(out.log).toEqual([user, turn]);
+    expect(out.lastTurnTokens).toBe(0); // non-number coerced
+    expect(out.lastActiveAt).toBe(9);
+    expect(out.draft).toBeUndefined();
+  });
+
+  it('keeps a string draft and drops a non-string one', () => {
+    expect(convoDataFrom({ log: [], lastActiveAt: 0, turns: 0, draft: 'd' }).draft).toBe('d');
+    expect(
+      convoDataFrom({ log: [], lastActiveAt: 0, turns: 0, draft: 7 }).draft,
+    ).toBeUndefined();
+  });
+
+  it('throws on malformed payloads instead of writing them to disk', () => {
+    expect(() => convoDataFrom(null)).toThrow();
+    expect(() => convoDataFrom([])).toThrow();
+    expect(() => convoDataFrom({ log: 'nope' })).toThrow();
+    expect(() => convoDataFrom({ log: [{ kind: 'mystery' }] })).toThrow();
+    expect(() => convoDataFrom({ log: [{ kind: 'turn', ts: 1 }] })).toThrow(); // no events array
   });
 });

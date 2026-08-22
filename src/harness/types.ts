@@ -1,9 +1,10 @@
 /**
- * Wire-level protocol between the UI and a harness backend.
+ * Wire-level protocol between the renderer and the harness backend.
  *
- * The renderer only ever consumes `AsyncIterable<HarnessEvent>`, so backends
- * are interchangeable: `MockHarness` (scripted, local) and `IpcHarness`
- * (LiteLLM via the main process) both implement `Harness`.
+ * Turns run in the main process — the active provider's SDK executes inside
+ * the active environment's Docker container — and stream back over the
+ * preload bridge as `HarnessEvent`s. `IpcHarness` (src/harness/ipc.ts)
+ * adapts that callback stream into the `AsyncGenerator` protocol below.
  */
 
 export interface TurnStats {
@@ -59,13 +60,15 @@ type HarnessEventBody =
 export type HarnessEvent = HarnessEventBody & { ts?: number };
 
 export interface Harness {
-  /** Model / backend identity shown in the top bar. */
-  readonly label: string;
   /**
-   * Send one user prompt within a session. Returns the turn's id (for
-   * interrupt / answerAsk routing) plus its event stream. Turns from
-   * different sessions may run concurrently; backends keep per-session
-   * conversation history.
+   * Send one user prompt to an agent's conversation. Returns the turn's id
+   * (for interrupt / answerAsk routing) plus its event stream. Turns for
+   * different agents may run concurrently; the backend keeps per-agent
+   * history via provider resume ids.
    */
-  send(sessionId: string, prompt: string): { turnId: string; events: AsyncGenerator<HarnessEvent> };
+  send(agentId: string, prompt: string): { turnId: string; events: AsyncGenerator<HarnessEvent> };
+  /** Interrupt a specific in-flight turn. */
+  interrupt(turnId: string): void;
+  /** Answer (or dismiss, with null) a mid-turn question from the agent. */
+  answerAsk(turnId: string, askId: string, answers: Record<string, string> | null): Promise<void>;
 }

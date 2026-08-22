@@ -3,6 +3,14 @@
 
 const readline = require('node:readline');
 
+// Wire contract with the host (src/main/runner.ts WIRE) — the sync is
+// enforced by test/unit/runner-source.test.ts, which extracts this block.
+// RV is the protocol revision the ready handshake reports; bump it whenever
+// the turn-request wire format grows so old hosts can detect new runners
+// and new hosts can warn about stale ones.
+const OP = { turn: 'turn', interrupt: 'interrupt', answer: 'answer' };
+const RV = 2;
+
 const CWD = '/workspace';
 // Claude Code refuses bypassPermissions as root unless it knows it's sandboxed.
 process.env.IS_SANDBOX = '1';
@@ -22,6 +30,15 @@ function send(obj) {
 }
 function emit(id, event) {
   send({ id: id, event: event });
+}
+/** Compiled schema settings (host-side), then the advanced passthrough LAST —
+ *  base < settings < advanced. Both are validated host-side; garbage is skipped. */
+function applyOverrides(target, req) {
+  for (const json of [req.settings, req.advanced]) {
+    if (json) {
+      try { Object.assign(target, JSON.parse(json)); } catch (err) { /* validated host-side */ }
+    }
+  }
 }
 function errText(err) {
   return err && err.message ? String(err.message) : String(err);
@@ -98,7 +115,12 @@ const PROVIDERS = {
  * error surfacing, guaranteed turn-end, and the final done message.
  */
 async function runTurn(req) {
-  const p = PROVIDERS[req.provider] || PROVIDERS['claude-code']; // unknown -> claude
+  const p = PROVIDERS[req.provider];
+  if (!p) {
+    // A provider this runner predates must fail loudly — falling back to
+    // another provider would run the wrong model with the wrong settings.
+    throw new Error('This environment\'s runner does not know provider "' + req.provider + '". Restart the environment to update it.');
+  }
   const sdk = await p.loadSdk(); // before turn-start: import failures use the dispatch error path
   const started = Date.now();
   const state = { thinking: false, ended: false, session: req.resume || null };
@@ -170,6 +192,7 @@ async function runClaude(req, sdk, ctx) {
   const options = {
     cwd: CWD,
     permissionMode: 'bypassPermissions',
+    allowDangerouslySkipPermissions: true,
     includePartialMessages: true,
     canUseTool: async function (toolName, input) {
       if (toolName === 'AskUserQuestion') {
@@ -188,9 +211,7 @@ async function runClaude(req, sdk, ctx) {
     options.systemPrompt = { type: 'preset', preset: 'claude_code', append: req.systemPrompt };
   }
   if (req.thinking && req.thinking !== 'auto') options.effort = req.thinking;
-  if (req.advanced) {
-    try { Object.assign(options, JSON.parse(req.advanced)); } catch (err) { /* validated upstream */ }
-  }
+  applyOverrides(options, req);
 
   let sawText = false;
   // AskUserQuestion renders as a question card via the 'ask' event — suppress
@@ -379,27 +400,22 @@ async function runCodex(req, sdk, ctx) {
   const config = { sandbox_mode: 'danger-full-access', approval_policy: 'never' };
   if (req.model && req.model !== 'auto') config.model = req.model;
   if (req.thinking && req.thinking !== 'auto') config.model_reasoning_effort = req.thinking;
-  if (req.advanced) {
-    try { Object.assign(config, JSON.parse(req.advanced)); } catch (err) { /* validated upstream */ }
-  }
+  // System instructions ride the developer-instructions config channel, so
+  // they apply on every turn (resumes included), not just the first message.
+  if (req.systemPrompt) config.developer_instructions = req.systemPrompt;
+  applyOverrides(config, req);
   const client = new sdk.Codex({ config: config });
   const threadOptions = { workingDirectory: CWD, skipGitRepoCheck: true };
   const thread = req.resume
     ? client.resumeThread(req.resume, threadOptions)
     : client.startThread(threadOptions);
-  // Codex has no separate system channel in the SDK; deliver instructions at
-  // thread start ahead of the first user message.
-  let prompt = req.prompt;
-  if (!req.resume && req.systemPrompt) {
-    prompt = 'System instructions:\n' + req.systemPrompt + '\n\n---\n\n' + prompt;
-  }
 
   const aborter = new AbortController();
   const openTools = new Set();
   ctx.onInterrupt(function () { aborter.abort(); });
 
   try {
-    const streamed = await thread.runStreamed(prompt, { signal: aborter.signal });
+    const streamed = await thread.runStreamed(req.prompt, { signal: aborter.signal });
     for await (const ev of streamed.events) {
       if (ev.type === 'thread.started') {
         if (ev.thread_id) ctx.session(ev.thread_id);
@@ -461,23 +477,28 @@ const rl = readline.createInterface({ input: process.stdin });
 rl.on('line', function (line) {
   let req;
   try { req = JSON.parse(line); } catch (err) { return; }
-  if (req.op === 'ping') {
-    send({ ready: true });
-  } else if (req.op === 'interrupt') {
+  if (req.op === OP.interrupt) {
     const fn = active.get(req.id);
     if (fn) fn();
-  } else if (req.op === 'answer') {
+  } else if (req.op === OP.answer) {
     const resolve = pendingAsks.get(req.askId);
     if (resolve) resolve(req.answers || null);
-  } else if (req.op === 'turn') {
+  } else if (req.op === OP.turn) {
     runTurn(req)
       .catch(function (err) {
+        // Failures before/around the turn body (unknown provider, SDK import)
+        // must still terminate the stream: turn-end is the protocol's only
+        // terminal event, and the host UI waits for it.
         emit(req.id, { kind: 'error', message: errText(err) });
+        emit(req.id, { kind: 'turn-end', stats: { inputTokens: 0, outputTokens: 0, durationMs: 0 } });
         send({ id: req.id, done: true, providerSessionId: null });
       })
-      .then(function () { active.delete(req.id); });
+      .then(function () {
+        active.delete(req.id);
+        asksByReq.delete(req.id);
+      });
   }
 });
 rl.on('close', function () { process.exit(0); });
 
-send({ ready: true });
+send({ ready: true, rv: RV });

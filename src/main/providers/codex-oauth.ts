@@ -1,16 +1,16 @@
 /**
- * Codex account OAuth.
+ * Codex account OAuth — the provider-specific half.
  *
  * Reproduces `codex login`: Authorization Code + PKCE against auth.openai.com
  * with a local callback server on 127.0.0.1:1455 — so the login completes
- * automatically, no code pasting. Tokens are stored encrypted and injected
- * into environment containers as ~/.codex/auth.json (schema matches what the
- * Codex CLI writes: auth_mode/OPENAI_API_KEY/tokens/last_refresh).
+ * automatically, no code pasting. Everything generic (storage, refresh
+ * policy, container-credential adoption and freshness) lives in the shared
+ * account (oauth.ts).
  */
 
 import * as http from 'node:http';
 import { closeAuthWindow, openAuthWindow } from '../authwindow';
-import { pkce, randomState, tokenStore } from './oauth';
+import { createOAuthAccount, pkce, randomState } from './oauth';
 
 const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'; // Codex CLI's public OAuth client
 const ISSUER = 'https://auth.openai.com';
@@ -30,28 +30,61 @@ export interface CodexTokens {
   lastRefresh: string; // ISO
 }
 
-const store = tokenStore<CodexTokens>('codex-oauth.bin');
+export const account = createOAuthAccount<CodexTokens>({
+  storeName: 'codex-oauth.bin',
+  freshnessOf: (t) => Date.parse(t.lastRefresh) || 0,
+  needsRefresh: (t) => Date.now() - Date.parse(t.lastRefresh) > REFRESH_AFTER_MS && !!t.refreshToken,
+  async refresh(tokens) {
+    const res = await fetch(`${ISSUER}/oauth/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_id: CLIENT_ID,
+        grant_type: 'refresh_token',
+        refresh_token: tokens.refreshToken,
+        scope: 'openid profile email',
+      }),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      id_token?: string;
+      access_token?: string;
+      refresh_token?: string;
+    };
+    return {
+      idToken: data.id_token ?? tokens.idToken,
+      accessToken: data.access_token ?? tokens.accessToken,
+      refreshToken: data.refresh_token ?? tokens.refreshToken,
+      accountId: tokens.accountId,
+      lastRefresh: new Date().toISOString(),
+    };
+  },
+  parseContainerFile(parsed) {
+    const file = parsed as {
+      tokens?: {
+        id_token?: string;
+        access_token?: string;
+        refresh_token?: string;
+        account_id?: string;
+      };
+      last_refresh?: string;
+    } | null;
+    if (!file?.tokens?.access_token || !file.tokens.refresh_token || !file.last_refresh) {
+      return null;
+    }
+    return {
+      idToken: file.tokens.id_token ?? '',
+      accessToken: file.tokens.access_token,
+      refreshToken: file.tokens.refresh_token,
+      accountId: file.tokens.account_id ?? '',
+      lastRefresh: file.last_refresh,
+    };
+  },
+});
 
 let server: http.Server | null = null;
-let onLoginCb: (() => void) | null = null;
 
-export function setOnLogin(cb: () => void): void {
-  onLoginCb = cb;
-}
-
-export function status(): { connected: boolean; detail: string } {
-  const tokens = store.load();
-  return tokens
-    ? { connected: true, detail: `Connected — last refreshed ${tokens.lastRefresh.slice(0, 16)}` }
-    : { connected: false, detail: 'Not connected — sign in with your ChatGPT account' };
-}
-
-export function logout(): void {
-  closeServer();
-  store.clear();
-}
-
-function closeServer(): void {
+export function closeLoginServer(): void {
   server?.close();
   server = null;
 }
@@ -90,7 +123,7 @@ async function exchangeCode(code: string, verifier: string): Promise<void> {
     access_token: string;
     refresh_token: string;
   };
-  store.save({
+  account.save({
     idToken: data.id_token,
     accessToken: data.access_token,
     refreshToken: data.refresh_token,
@@ -105,7 +138,7 @@ async function exchangeCode(code: string, verifier: string): Promise<void> {
  * redirects to the local callback.
  */
 export function startLogin(): Promise<string> {
-  closeServer();
+  closeLoginServer();
   const { verifier, challenge } = pkce(64);
   const state = randomState();
   const url =
@@ -144,15 +177,16 @@ export function startLogin(): Promise<string> {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end('<h2>Codex is connected to Puck.</h2>');
         closeAuthWindow();
-        onLoginCb?.();
+        account.notifyLogin();
       } catch (err) {
+        account.recordError(err);
         res.writeHead(500).end(`Login failed: ${err instanceof Error ? err.message : err}`);
       } finally {
-        closeServer();
+        closeLoginServer();
       }
     });
     server.on('error', (err: NodeJS.ErrnoException) => {
-      closeServer();
+      closeLoginServer();
       reject(
         err.code === 'EADDRINUSE'
           ? new Error('Port 1455 is busy — is `codex login` running somewhere else?')
@@ -163,42 +197,8 @@ export function startLogin(): Promise<string> {
       openAuthWindow(url, 'Sign in to ChatGPT');
       resolve(url);
     });
-    setTimeout(closeServer, 10 * 60_000); // abandon after 10 minutes
+    setTimeout(closeLoginServer, 10 * 60_000); // abandon after 10 minutes
   });
-}
-
-export async function getFreshTokens(): Promise<CodexTokens | null> {
-  let tokens = store.load();
-  if (!tokens) return null;
-  const age = Date.now() - Date.parse(tokens.lastRefresh);
-  if (age > REFRESH_AFTER_MS && tokens.refreshToken) {
-    const res = await fetch(`${ISSUER}/oauth/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        client_id: CLIENT_ID,
-        grant_type: 'refresh_token',
-        refresh_token: tokens.refreshToken,
-        scope: 'openid profile email',
-      }),
-    });
-    if (res.ok) {
-      const data = (await res.json()) as {
-        id_token?: string;
-        access_token?: string;
-        refresh_token?: string;
-      };
-      tokens = {
-        idToken: data.id_token ?? tokens.idToken,
-        accessToken: data.access_token ?? tokens.accessToken,
-        refreshToken: data.refresh_token ?? tokens.refreshToken,
-        accountId: tokens.accountId,
-        lastRefresh: new Date().toISOString(),
-      };
-      store.save(tokens);
-    }
-  }
-  return tokens;
 }
 
 /** The ~/.codex/auth.json body the Codex CLI reads (schema verified). */
@@ -214,33 +214,4 @@ export function authJsonContent(tokens: CodexTokens): string {
     },
     last_refresh: tokens.lastRefresh,
   });
-}
-
-/** Adopt container-side credentials when fresher (the CLI rotates tokens). */
-export function adoptIfNewer(authJson: string): void {
-  try {
-    const parsed = JSON.parse(authJson) as {
-      tokens?: {
-        id_token?: string;
-        access_token?: string;
-        refresh_token?: string;
-        account_id?: string;
-      };
-      last_refresh?: string;
-    };
-    if (!parsed.tokens?.access_token || !parsed.tokens.refresh_token || !parsed.last_refresh) {
-      return;
-    }
-    const current = store.load();
-    if (current && Date.parse(current.lastRefresh) >= Date.parse(parsed.last_refresh)) return;
-    store.save({
-      idToken: parsed.tokens.id_token ?? current?.idToken ?? '',
-      accessToken: parsed.tokens.access_token,
-      refreshToken: parsed.tokens.refresh_token,
-      accountId: parsed.tokens.account_id ?? current?.accountId ?? '',
-      lastRefresh: parsed.last_refresh,
-    });
-  } catch {
-    // unparseable — ignore
-  }
 }

@@ -1,5 +1,8 @@
 # Puck Design Tokens
 
+> Visual language only — architecture and contributor guidance live in
+> `AGENTS.md` and the module header comments.
+
 Puck's visual language: a cream canvas with deep emerald as the working
 accent and gold reserved for "agent is doing something" signals. (The
 palette's origin is a leftover luxury-goods design doc that shipped with the

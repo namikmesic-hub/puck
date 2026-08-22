@@ -1,7 +1,8 @@
 /**
- * Live harness backend: forwards turns to the main process over the preload
- * bridge (which streams from a LiteLLM proxy) and adapts the tagged event
- * callbacks back into the `AsyncGenerator<HarnessEvent>` protocol.
+ * The live harness backend: forwards turns to the main process over the
+ * preload bridge (which runs them via provider SDKs inside the environment's
+ * Docker container) and adapts the turnId-tagged event callbacks back into
+ * the `AsyncGenerator<HarnessEvent>` protocol.
  */
 
 import type { PuckBridge } from './bridge';
@@ -29,10 +30,7 @@ export class IpcHarness implements Harness {
   private queues = new Map<string, AsyncQueue<HarnessEvent>>();
   private turnSeq = 0;
 
-  constructor(
-    private bridge: PuckBridge,
-    public label: string,
-  ) {
+  constructor(private bridge: PuckBridge) {
     this.bridge.onEvent(({ turnId, event }) => {
       this.queues.get(turnId)?.push(event);
     });
@@ -48,14 +46,14 @@ export class IpcHarness implements Harness {
     return this.bridge.answerAsk(turnId, askId, answers);
   }
 
-  send(sessionId: string, prompt: string): { turnId: string; events: AsyncGenerator<HarnessEvent> } {
+  send(agentId: string, prompt: string): { turnId: string; events: AsyncGenerator<HarnessEvent> } {
     const turnId = `ipc-${++this.turnSeq}`;
     const queue = new AsyncQueue<HarnessEvent>();
     this.queues.set(turnId, queue);
 
     // If the IPC call itself dies, synthesize a terminal pair of events so the
     // consuming loop always ends.
-    void this.bridge.startTurn(turnId, sessionId, prompt).catch((err: Error) => {
+    void this.bridge.startTurn(turnId, agentId, prompt).catch((err: Error) => {
       queue.push({ kind: 'error', message: err.message });
       queue.push({
         kind: 'turn-end',

@@ -1,26 +1,21 @@
 /**
- * Claude account OAuth.
+ * Claude account OAuth — the provider-specific half.
  *
  * Drives the same Authorization Code + PKCE flow `claude /login` performs,
  * from inside Puck: open the authorize page in the app's sign-in window,
- * intercept the callback redirect, exchange the code for tokens, and keep
- * them encrypted at rest. Tokens authenticate Claude Code inside environment
- * containers (injected as ~/.claude/.credentials.json by environments.ts).
+ * intercept the callback redirect, exchange the code for tokens. Everything
+ * generic (storage, refresh-before-use, container-credential adoption and
+ * freshness) lives in the shared account (oauth.ts).
  */
 
 import { closeAuthWindow, openAuthWindow } from '../authwindow';
-import { pkce, randomState, tokenStore } from './oauth';
+import { createOAuthAccount, pkce, randomState } from './oauth';
 
 const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'; // Claude Code's public OAuth client
 const AUTHORIZE_URL = 'https://claude.ai/oauth/authorize';
 const TOKEN_URL = 'https://console.anthropic.com/v1/oauth/token';
 const REDIRECT_URI = 'https://console.anthropic.com/oauth/code/callback';
 const SCOPE = 'org:create_api_key user:profile user:inference';
-
-export interface ClaudeAuthStatus {
-  connected: boolean;
-  expiresAt: number | null;
-}
 
 export interface StoredTokens {
   accessToken: string;
@@ -29,23 +24,53 @@ export interface StoredTokens {
   scopes: string[];
 }
 
-const store = tokenStore<StoredTokens>('claude-oauth.bin');
+export const account = createOAuthAccount<StoredTokens>({
+  storeName: 'claude-oauth.bin',
+  freshnessOf: (t) => t.expiresAt,
+  needsRefresh: (t) => Date.now() > t.expiresAt - 5 * 60_000 && !!t.refreshToken,
+  async refresh(tokens) {
+    const res = await fetch(TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'refresh_token',
+        refresh_token: tokens.refreshToken,
+        client_id: CLIENT_ID,
+      }),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      access_token: string;
+      refresh_token?: string;
+      expires_in?: number;
+    };
+    return {
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token ?? tokens.refreshToken,
+      expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
+      scopes: tokens.scopes,
+    };
+  },
+  parseContainerFile(parsed) {
+    const oauth = (parsed as {
+      claudeAiOauth?: {
+        accessToken?: string;
+        refreshToken?: string;
+        expiresAt?: number;
+        scopes?: string[];
+      };
+    } | null)?.claudeAiOauth;
+    if (!oauth?.accessToken || !oauth.refreshToken || !oauth.expiresAt) return null;
+    return {
+      accessToken: oauth.accessToken,
+      refreshToken: oauth.refreshToken,
+      expiresAt: oauth.expiresAt,
+      scopes: oauth.scopes ?? ['user:inference', 'user:profile'],
+    };
+  },
+});
 
 let pending: { verifier: string; state: string } | null = null;
-let onLoginCb: (() => void) | null = null;
-
-export function setOnLogin(cb: () => void): void {
-  onLoginCb = cb;
-}
-
-export function status(): ClaudeAuthStatus {
-  const tokens = store.load();
-  return { connected: !!tokens, expiresAt: tokens?.expiresAt ?? null };
-}
-
-export function logout(): void {
-  store.clear();
-}
 
 /**
  * Opens the authorize page in a dedicated sign-in window and intercepts the
@@ -70,7 +95,7 @@ export function startLogin(): string {
 
   const win = openAuthWindow(url, 'Sign in to Claude');
   let consumed = false; // three navigation hooks can see one callback
-  const intercept = (target: string) => {
+  const intercept = (target: string): void => {
     if (consumed || !target.startsWith(REDIRECT_URI)) return;
     try {
       const cb = new URL(target);
@@ -81,8 +106,8 @@ export function startLogin(): string {
         consumed = true;
         closeAuthWindow();
         void exchange(code, cbState ?? undefined)
-          .then(() => onLoginCb?.())
-          .catch((err) => console.error('Claude login failed:', err));
+          .then(() => account.notifyLogin())
+          .catch((err) => account.recordError(err));
       }
     } catch {
       // not a parseable URL — ignore
@@ -119,44 +144,12 @@ async function exchange(code: string, state?: string): Promise<void> {
     expires_in?: number;
     scope?: string;
   };
-  store.save({
+  account.save({
     accessToken: data.access_token,
     refreshToken: data.refresh_token,
     expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
     scopes: data.scope ? data.scope.split(' ') : ['user:inference', 'user:profile'],
   });
-}
-
-/** Returns valid tokens, refreshing through the token endpoint when stale. */
-export async function getFreshTokens(): Promise<StoredTokens | null> {
-  let tokens = store.load();
-  if (!tokens) return null;
-  if (Date.now() > tokens.expiresAt - 5 * 60_000 && tokens.refreshToken) {
-    const res = await fetch(TOKEN_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        grant_type: 'refresh_token',
-        refresh_token: tokens.refreshToken,
-        client_id: CLIENT_ID,
-      }),
-    });
-    if (res.ok) {
-      const data = (await res.json()) as {
-        access_token: string;
-        refresh_token?: string;
-        expires_in?: number;
-      };
-      tokens = {
-        accessToken: data.access_token,
-        refreshToken: data.refresh_token ?? tokens.refreshToken,
-        expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
-        scopes: tokens.scopes,
-      };
-      store.save(tokens);
-    }
-  }
-  return tokens;
 }
 
 /** The ~/.claude/.credentials.json body Claude Code reads on Linux. */
@@ -170,33 +163,4 @@ export function credentialsFileContent(tokens: StoredTokens): string {
       subscriptionType: 'max',
     },
   });
-}
-
-/**
- * Adopt credentials found in a container when they're fresher than ours —
- * Claude Code refreshes (and rotates) tokens itself mid-session.
- */
-export function adoptIfNewer(credentialsJson: string): void {
-  try {
-    const parsed = JSON.parse(credentialsJson) as {
-      claudeAiOauth?: {
-        accessToken?: string;
-        refreshToken?: string;
-        expiresAt?: number;
-        scopes?: string[];
-      };
-    };
-    const oauth = parsed.claudeAiOauth;
-    if (!oauth?.accessToken || !oauth.refreshToken || !oauth.expiresAt) return;
-    const current = store.load();
-    if (current && current.expiresAt >= oauth.expiresAt) return;
-    store.save({
-      accessToken: oauth.accessToken,
-      refreshToken: oauth.refreshToken,
-      expiresAt: oauth.expiresAt,
-      scopes: oauth.scopes ?? current?.scopes ?? ['user:inference', 'user:profile'],
-    });
-  } catch {
-    // unparseable — ignore
-  }
 }

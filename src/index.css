@@ -127,26 +127,18 @@ svg {
   padding: 2px 8px;
 }
 
-.nav {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
 .nav-item {
   display: flex;
   align-items: center;
   gap: 11px;
+  width: 100%;
   padding: 8px 10px;
   border-radius: 10px;
   font-size: 14px;
   font-weight: 500;
+  text-align: left;
   color: var(--charcoal);
   transition: background 0.15s ease;
-}
-
-.nav-item svg {
-  color: var(--gray);
 }
 
 .nav-item:hover {
@@ -156,6 +148,14 @@ svg {
 .nav-item.active {
   background: var(--emerald-tint);
   font-weight: 600;
+}
+
+.nav-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gray-light);
+  margin: 12px 0 4px;
+  padding: 0 10px;
 }
 
 .recents {
@@ -231,23 +231,6 @@ svg {
   color: var(--emerald-dark);
 }
 
-.recent-del {
-  position: absolute;
-  right: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: var(--gray-light);
-  font-size: 11px;
-  padding: 4px 6px;
-  border-radius: 6px;
-  opacity: 0;
-  transition: opacity 0.12s ease, color 0.12s ease;
-}
-
-.recent-item:hover .recent-del {
-  opacity: 1;
-}
-
 /* Live session activity: gold pulse while running, colored dot when done. */
 .recent-status {
   position: absolute;
@@ -307,10 +290,6 @@ svg {
 
 .recent-item.child:hover .recent-status {
   opacity: 1; /* children have no delete button to make room for */
-}
-
-.recent-del:hover {
-  color: var(--red);
 }
 
 .sidebar-footer {
@@ -498,23 +477,79 @@ svg {
   border-color: var(--red);
 }
 
-.recent-del.armed {
-  opacity: 1;
-  color: var(--white);
-  background: var(--red);
+/* ---------- Settings modal ---------- */
+
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80; /* below the palette (90) and toast (100) */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4vh 4vw;
+  background: rgba(28, 28, 26, 0.45);
+  animation: fade-in 0.15s ease;
 }
 
-/* ---------- Pages (environments / providers) ---------- */
+.settings-overlay.hidden {
+  display: none;
+}
 
-.env-view {
+.settings-modal {
+  display: flex;
+  width: min(1160px, 100%);
+  height: min(800px, 100%);
+  background: var(--cream);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 24px 80px rgba(28, 28, 26, 0.35);
+  overflow: hidden;
+}
+
+.sm-menu {
+  flex: none;
+  width: 190px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 18px 10px;
+  background: var(--white);
+  border-right: 1px solid var(--line-soft);
+}
+
+.sm-menu .nav-label {
+  margin-top: 0;
+}
+
+.sm-body {
+  position: relative;
   flex: 1;
-  min-height: 0;
+  min-width: 0;
+  display: flex;
+}
+
+.sm-close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  z-index: 5;
+}
+
+/* Each page is its own scroll container (the agent editor's scroll-spy and
+   sticky save bar depend on the page element being the scroller). */
+.sm-page {
+  flex: 1;
+  min-width: 0;
   overflow-y: auto;
   animation: fade-in 0.15s ease;
 }
 
-.env-view.hidden {
+.sm-page.hidden {
   display: none;
+}
+
+.sm-page .env-page {
+  padding-top: 20px;
 }
 
 .env-page {
@@ -610,41 +645,15 @@ svg {
   display: none;
 }
 
-/* Underline tab bar for switching settings sections. */
-.tabs {
-  display: flex;
-  gap: 24px;
-  margin: 12px 0 4px;
-  border-bottom: 1px solid var(--line-soft);
+/* Keyboard-driven navigation focuses the destination page title. */
+.page-title[tabindex='-1'] {
+  width: fit-content; /* the focus ring hugs the text, not the column */
 }
 
-.tab {
-  position: relative;
-  font-size: 13.5px;
-  font-weight: 550;
-  color: var(--gray);
-  padding: 8px 1px 11px;
-  transition: color 0.15s ease;
-}
-
-.tab:hover {
-  color: var(--charcoal);
-}
-
-.tab.active {
-  color: var(--emerald-dark);
-  font-weight: 650;
-}
-
-.tab.active::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
-  height: 2px;
-  border-radius: 2px;
-  background: var(--emerald);
+.page-title[tabindex='-1']:focus-visible {
+  outline: 2px solid rgba(46, 94, 78, 0.4);
+  outline-offset: 3px;
+  border-radius: 4px;
 }
 
 .page-sub code {
@@ -882,18 +891,595 @@ svg {
   border-color: rgba(46, 94, 78, 0.4);
 }
 
-#d-dockerfile {
-  width: 100%;
-  resize: vertical;
-  font-family: var(--font-mono);
+/* ---------- Agent editor (two-column: section rail + card stack) ---------- */
+
+#agent-detail-view .env-page {
+  padding-bottom: 24px; /* the sticky save bar carries the page's bottom edge */
+}
+
+.agent-editor {
+  display: grid;
+  grid-template-columns: 164px minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+  margin-top: 12px;
+}
+
+.section-nav {
+  position: sticky;
+  top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.section-nav-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gray-light);
+  margin: 14px 0 4px;
+  padding-left: 10px;
+}
+
+.section-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
   font-size: 12.5px;
-  line-height: 1.6;
-  color: var(--charcoal);
+  font-weight: 550;
+  color: var(--gray);
+  text-align: left;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.section-nav-item:hover {
+  background: var(--emerald-tint);
+  color: var(--emerald-dark);
+}
+
+/* Location marker, not a selection pill — keeps the in-page rail visually
+   distinct from the sidebar settings menu's active pill. */
+.section-nav-item.active {
+  background: none;
+  color: var(--emerald-dark);
+  font-weight: 650;
+  box-shadow: inset 2px 0 0 var(--emerald);
+  border-radius: 0 8px 8px 0;
+}
+
+.section-nav-item:focus-visible {
+  outline: 2px solid rgba(46, 94, 78, 0.4);
+  outline-offset: 1px;
+}
+
+.section-nav-text {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Change dot: the group holds overrides. */
+.section-nav-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--emerald);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.section-nav-item.mod .section-nav-dot {
+  opacity: 1;
+}
+
+.agent-editor-main {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 0;
+}
+
+/* The options container contributes its group cards straight to the stack. */
+.agent-editor-main .opt-form {
+  display: contents;
+}
+
+.ed-card {
   background: var(--white);
   border: 1px solid var(--line);
-  border-radius: 9px;
-  padding: 10px 12px;
+  border-radius: 14px;
+  padding: 16px 20px 18px;
+  scroll-margin-top: 10px;
+}
+
+.ed-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.ed-card-head h4,
+.ed-card-head .opt-group-title {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--charcoal);
+  margin: 0;
+}
+
+.ed-card-head .hint-inline {
+  margin-left: 0;
+}
+
+/* Identity fields: name/provider side by side, then full-width picker rows. */
+.id-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 18px;
+}
+
+.id-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  margin-top: 14px;
+}
+
+.id-row-label {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--gray-light);
+}
+
+.id-row .model-custom {
+  width: min(320px, 100%);
+}
+
+/* Slotted schema options (e.g. Claude's thinking/model knobs) join the card
+   below the identity rows, separated by the same hairline as opt-rows. */
+.opt-slot {
+  margin-top: 14px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.config-form input.model-custom {
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.model-custom.hidden {
+  display: none;
+}
+
+.json-warn {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--red);
+}
+
+.json-warn.hidden {
+  display: none;
+}
+
+.config-form textarea.invalid {
+  border-color: rgba(160, 60, 50, 0.5);
+}
+
+/* Sticky save bar: action, dirty state, and errors travel with the viewport. */
+.save-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 18px calc(-1 * var(--content-pad)) 0;
+  padding: 12px var(--content-pad);
+  background: rgba(255, 253, 247, 0.92);
+  backdrop-filter: blur(8px);
+  border-top: 1px solid var(--line-soft);
+}
+
+.save-bar .form-msg {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+}
+
+.save-bar .hint-inline {
+  margin-left: 0;
+}
+
+.save-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gray);
+  white-space: nowrap;
+}
+
+.save-state.on::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--gold);
+}
+
+/* Narrow windows: the rail becomes a wrapping chip row above the cards. */
+@media (max-width: 980px) {
+  .agent-editor {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
+
+  .section-nav {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .section-nav-label {
+    display: none;
+  }
+
+  .section-nav-item {
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 3px 11px;
+  }
+
+  .save-bar .hint-inline {
+    display: none;
+  }
+}
+
+/* ---------- Schema-driven provider options ---------- */
+
+.opt-group-mod {
+  font-size: 10.5px;
+  font-weight: 650;
+  color: var(--emerald);
+  background: var(--emerald-tint);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.opt-group-mod:empty {
+  display: none;
+}
+
+/* Settings row: name + description left, control right, danger full-width. */
+.opt-row {
+  /* Wrapping flex: a control too wide for the remaining space (long pill
+     sets) drops onto its own right-aligned line instead of crushing or
+     overlapping the description. */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 24px;
+  padding: 11px 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.ed-card-head + .opt-row {
+  border-top: none;
+  padding-top: 4px;
+}
+
+.opt-row.hidden,
+.opt-danger.hidden {
+  display: none;
+}
+
+.opt-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.opt-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--charcoal);
+}
+
+.opt-desc {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--gray-light);
+  max-width: 60ch;
+}
+
+.opt-control {
+  display: flex;
+  justify-content: flex-end;
+  flex: 0 1 auto;
+  margin-left: auto;
+  min-width: 0;
+}
+
+.opt-control > input,
+.opt-control > select {
+  width: min(300px, 100%);
+}
+
+/* Default hint doubles as the reset control: quiet text at rest, a filled
+   emerald pill while the value is overridden. */
+.opt-default {
+  font-family: var(--font-ui);
+  font-size: 10.5px;
+  font-weight: 550;
+  color: var(--gray-light);
+  background: none;
+  border: none;
+  border-radius: 999px;
+  padding: 1px 0; /* flush at rest so a wrapped hint aligns with the text */
+  margin-left: 6px;
+  white-space: nowrap;
+  cursor: default;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.opt-default.on {
+  background: var(--emerald);
+  color: var(--cream);
+  padding: 1px 8px;
+  margin-left: 4px;
+  cursor: pointer;
+}
+
+.opt-default.on::before {
+  content: '↺ ';
+}
+
+.opt-default.on:hover {
+  background: var(--emerald-light);
+}
+
+.opt-danger {
+  flex-basis: 100%;
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--red);
+  background: rgba(160, 60, 50, 0.06);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+/* Adjacent toggles pack into a grid of bordered cells (11 Claude tools). */
+.opt-bool-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(236px, 1fr));
+  gap: 8px;
+  padding: 11px 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.ed-card-head + .opt-bool-grid {
+  border-top: none;
+  padding-top: 4px;
+}
+
+.opt-bool-grid .opt-row {
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  padding: 9px 12px 10px;
+  column-gap: 12px;
+  align-items: start;
+}
+
+.opt-bool-grid .opt-row .switch {
+  margin-top: 1px; /* optically align with the first text line */
+}
+
+/* In the dense grid the default hint only appears once it's a reset action. */
+.opt-bool-grid .opt-default:not(.on) {
+  display: none;
+}
+
+/* Per-group advanced disclosure. */
+.opt-adv summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  padding: 9px 0 8px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--gray-light);
+  transition: color 0.15s ease;
+}
+
+.opt-adv summary::-webkit-details-marker {
+  display: none;
+}
+
+.opt-adv summary::before {
+  content: '▸';
+  font-size: 10px;
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+
+.opt-adv[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.opt-adv summary:hover {
+  color: var(--emerald-dark);
+}
+
+.opt-adv-count {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0;
+  color: var(--gray);
+  background: var(--emerald-tint);
+  border-radius: 999px;
+  padding: 0 7px;
+}
+
+/* Toggle switch */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.switch input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.switch-track {
+  position: absolute;
+  inset: 0;
+  background: rgba(46, 94, 78, 0.22);
+  border-radius: 999px;
+  transition: background 0.15s ease;
+  pointer-events: none;
+}
+
+.switch-track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--white);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  transition: transform 0.15s ease;
+}
+
+.switch input:checked + .switch-track {
+  background: var(--emerald);
+}
+
+.switch input:checked + .switch-track::after {
+  transform: translateX(16px);
+}
+
+.switch input:focus-visible + .switch-track {
+  outline: 2px solid rgba(46, 94, 78, 0.4);
+  outline-offset: 2px;
+}
+
+/* Segmented control: wrappable pill chips — one selection language for the
+   identity pickers and every schema enum, safe at any width. */
+.seg {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.seg-btn {
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  padding: 5px 13px;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--gray);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.seg-btn:hover {
+  background: var(--emerald-tint);
+}
+
+.seg-btn[aria-pressed='true'] {
+  background: var(--emerald);
+  border-color: var(--emerald);
+  color: var(--cream);
+}
+
+/* Range slider */
+.slider-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.config-form .opt-form input[type='range'] {
+  border: none;
+  padding: 0;
+  background: rgba(46, 94, 78, 0.18);
+}
+
+.slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 150px;
+  height: 4px;
+  border-radius: 999px;
+  accent-color: var(--emerald);
   outline: none;
+}
+
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--emerald);
+  border: none;
+  cursor: pointer;
+}
+
+.slider:focus-visible {
+  outline: 2px solid rgba(46, 94, 78, 0.4);
+  outline-offset: 4px;
+}
+
+.slider-val {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--charcoal);
+  min-width: 52px;
+  text-align: right;
+}
+
+/* Unset number: the provider default applies — dim the parked thumb. */
+.slider-wrap.unset .slider-val {
+  color: var(--gray-light);
+}
+
+.slider-wrap.unset .slider::-webkit-slider-thumb {
+  background: rgba(46, 94, 78, 0.35);
 }
 
 .kv-list {
@@ -967,10 +1553,6 @@ svg {
   flex: 1;
   min-height: 0;
   display: flex;
-}
-
-.stage.hidden {
-  display: none;
 }
 
 .stage-main {
@@ -1306,12 +1888,6 @@ svg {
   min-width: 0;
 }
 
-.row-text {
-  font-size: 14.5px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-}
-
 .load-earlier {
   display: flex;
   justify-content: center;
@@ -1342,58 +1918,6 @@ svg {
   border-radius: 999px;
   padding: 3px 12px;
   background: var(--white);
-}
-
-/* Legacy transcript markup (bubbles) from before the Slack-style rows —
-   kept so previously persisted conversations still render. */
-
-.msg {
-  display: flex;
-  flex-direction: column;
-  margin: 13px 0;
-}
-
-.msg.user {
-  align-items: flex-end;
-}
-
-.msg.user .bubble {
-  background: var(--emerald);
-  color: var(--white);
-  border-radius: 16px 16px 5px 16px;
-  padding: 10px 16px;
-  max-width: 72%;
-  font-size: 14.5px;
-  white-space: pre-wrap;
-}
-
-.msg-label {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--gray);
-  margin-bottom: 10px;
-}
-
-.label-dot {
-  width: 19px;
-  height: 19px;
-  border-radius: 6px;
-  background: var(--emerald);
-  color: var(--white);
-  font-family: var(--font-display);
-  font-size: 11px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.msg.assistant .content {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
 }
 
 .prose {
@@ -1918,12 +2442,6 @@ svg {
   text-overflow: ellipsis;
 }
 
-.picker.sel svg:first-child {
-  width: 15px;
-  height: 15px;
-  color: var(--emerald);
-}
-
 .dot-mini {
   flex: none;
   width: 8px;
@@ -1944,67 +2462,6 @@ svg {
 .model-menu.menu-up {
   top: auto;
   bottom: 56px;
-}
-
-.tool-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 7px 11px;
-  border-radius: 999px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--gray);
-  transition: background 0.15s ease, color 0.15s ease;
-}
-
-.tool-chip svg {
-  width: 16px;
-  height: 16px;
-}
-
-.tool-chip:hover {
-  background: var(--emerald-tint);
-}
-
-.tool-chip.active {
-  color: var(--emerald);
-  font-weight: 600;
-}
-
-.tool-chip.attach {
-  padding: 7px;
-  margin-right: 2px;
-  background: var(--emerald-tint);
-  border-radius: 50%;
-  color: var(--charcoal);
-}
-
-.thinking-select {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 10px;
-  border-radius: 999px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--emerald);
-  transition: background 0.15s ease;
-}
-
-.thinking-select svg {
-  width: 16px;
-  height: 16px;
-}
-
-.thinking-select .chevron {
-  width: 13px;
-  height: 13px;
-  color: var(--emerald);
-}
-
-.thinking-select:hover {
-  background: var(--emerald-tint);
 }
 
 .send {
@@ -2176,17 +2633,6 @@ svg {
 }
 
 /* ---------- Animations ---------- */
-
-@keyframes fade-up {
-  from {
-    opacity: 0;
-    transform: translateY(14px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
 
 @keyframes fade-in {
   from {

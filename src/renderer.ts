@@ -8,9 +8,22 @@
 
 import './index.css';
 import './harness/bridge';
-import { armDelete, asButton, el, flashSaved, showToast, statusEl } from './renderer/dom';
-import { dayLabel, fmtClock, fmtTime, fmtTokens, relTime } from './renderer/format';
-import { renderMd } from './renderer/markdown';
+import { armDelete, el, flashSaved, showToast, statusEl } from './renderer/dom';
+import { button, errText, SEND_ICON, STOP_ICON } from './renderer/util';
+import { createSessionStore, type Session } from './renderer/session-store';
+import { applyEvent, initChatView } from './renderer/chat-view';
+import { initAgentEditor } from './renderer/settings/agent-editor';
+import {
+  escapeTarget,
+  navTransition,
+  type NavState,
+  type NavTarget,
+  type SettingsSection,
+  type View,
+} from './renderer/nav';
+import { addCard, cardShell, latestToken, loadingInto } from './renderer/settings/cards';
+import { envOpRail } from './renderer/settings/env-rail';
+import { fmtTokens, relTime } from './renderer/format';
 import { IpcHarness } from './harness/ipc';
 import type {
   AgentInfo,
@@ -20,7 +33,6 @@ import type {
   ProviderInfo,
   PuckBridge,
 } from './harness/bridge';
-import { AskQuestion, TurnStats } from './harness/types';
 
 /** Provider metadata cache — labels, hints, capabilities come from main. */
 let providersById = new Map<string, ProviderInfo>();
@@ -36,7 +48,7 @@ function providerLabel(id: string): string {
 }
 
 const bridge: PuckBridge | undefined = window.puck;
-const harness = bridge ? new IpcHarness(bridge, 'puck') : null;
+const harness = bridge ? new IpcHarness(bridge) : null;
 
 const stage = document.getElementById('stage') as HTMLElement;
 const chat = document.getElementById('chat') as HTMLElement;
@@ -53,42 +65,60 @@ const turnFullCrumb = document.getElementById('turn-full-crumb') as HTMLElement;
 const turnFullTitle = document.getElementById('turn-full-title') as HTMLElement;
 const turnFullBody = document.getElementById('turn-full-body') as HTMLElement;
 const openSettingsBtn = document.getElementById('open-settings') as HTMLButtonElement;
-const settingsBack = document.getElementById('settings-back') as HTMLButtonElement;
-const composerEl = document.getElementById('composer') as HTMLElement;
+const settingsNav = document.getElementById('settings-nav') as HTMLElement;
+const settingsOverlay = document.getElementById('settings-overlay') as HTMLElement;
+const settingsClose = document.getElementById('settings-close') as HTMLButtonElement;
+const sidebarEl = document.querySelector('.sidebar') as HTMLElement;
 const envselBtn = document.getElementById('envsel-btn') as HTMLButtonElement;
 const envselDot = document.getElementById('envsel-dot') as HTMLElement;
 const envselName = document.getElementById('envsel-name') as HTMLElement;
 const agentCards = document.getElementById('agent-cards') as HTMLElement;
 const agentMsg = document.getElementById('agent-msg') as HTMLElement;
 const agentDetailView = document.getElementById('agent-detail-view') as HTMLElement;
-const agentBack = document.getElementById('agent-back') as HTMLButtonElement;
 const agentTitle = document.getElementById('agent-title') as HTMLElement;
+const agentBack = document.getElementById('agent-back') as HTMLButtonElement;
 const agentStatus = document.getElementById('agent-status') as HTMLElement;
 const agentControls = document.getElementById('agent-controls') as HTMLElement;
 const agentDetailMsg = document.getElementById('agent-detail-msg') as HTMLElement;
 const aName = document.getElementById('a-name') as HTMLInputElement;
 const aProvider = document.getElementById('a-provider') as HTMLSelectElement;
+const aModelSeg = document.getElementById('a-model-seg') as HTMLElement;
 const aModel = document.getElementById('a-model') as HTMLInputElement;
-const aModelOptions = document.getElementById('a-model-options') as HTMLDataListElement;
-const aThinking = document.getElementById('a-thinking') as HTMLSelectElement;
+const aThinkingSeg = document.getElementById('a-thinking-seg') as HTMLElement;
 const aSystem = document.getElementById('a-system') as HTMLTextAreaElement;
 const aSystemHint = document.getElementById('a-system-hint') as HTMLElement;
+const aOptions = document.getElementById('a-options') as HTMLElement;
 const aAdvanced = document.getElementById('a-advanced') as HTMLTextAreaElement;
+const aAdvancedWarn = document.getElementById('a-advanced-warn') as HTMLElement;
 const aSave = document.getElementById('a-save') as HTMLButtonElement;
+const agentNav = document.getElementById('agent-nav') as HTMLElement;
+const agentEditorMain = document.getElementById('agent-editor-main') as HTMLElement;
+const agentDirty = document.getElementById('agent-dirty') as HTMLElement;
+const aedIdentity = document.getElementById('aed-identity') as HTMLElement;
+const aIdentityMod = document.getElementById('a-identity-mod') as HTMLElement;
+const aedInstructions = document.getElementById('aed-instructions') as HTMLElement;
+const aedAdvanced = document.getElementById('aed-advanced') as HTMLElement;
 const heroSubtitle = document.getElementById('hero-subtitle') as HTMLElement;
 const heroTitle = document.getElementById('hero-title') as HTMLElement;
 const heroAvatar = document.getElementById('hero-avatar') as HTMLElement;
 const heroCta = document.getElementById('hero-cta') as HTMLButtonElement;
 
-const USER_NAME = 'Feynman';
+/** Display label for the human author; persisted entries store 'user'. */
+const USER_NAME = 'You';
 const settingsView = document.getElementById('settings-view') as HTMLElement;
 const providerCards = document.getElementById('provider-cards') as HTMLElement;
 const envCards = document.getElementById('env-cards') as HTMLElement;
 const envMsg = document.getElementById('env-msg') as HTMLElement;
 const providerMsg = document.getElementById('provider-msg') as HTMLElement;
 const envDetailView = document.getElementById('env-detail-view') as HTMLElement;
-const detailBack = document.getElementById('detail-back') as HTMLButtonElement;
 const detailTitle = document.getElementById('detail-title') as HTMLElement;
+const detailBack = document.getElementById('detail-back') as HTMLButtonElement;
+const secAgents = document.getElementById('sec-agents') as HTMLElement;
+const secProviders = document.getElementById('sec-providers') as HTMLElement;
+const secEnvs = document.getElementById('sec-envs') as HTMLElement;
+const secAgentsTitle = document.getElementById('sec-agents-title') as HTMLElement;
+const secProvidersTitle = document.getElementById('sec-providers-title') as HTMLElement;
+const secEnvsTitle = document.getElementById('sec-envs-title') as HTMLElement;
 const detailStatus = document.getElementById('detail-status') as HTMLElement;
 const detailControls = document.getElementById('detail-controls') as HTMLElement;
 const detailMsg = document.getElementById('detail-msg') as HTMLElement;
@@ -106,37 +136,6 @@ const dSecretKey = document.getElementById('d-secret-key') as HTMLInputElement;
 const dSecretVal = document.getElementById('d-secret-val') as HTMLInputElement;
 const dSecretAdd = document.getElementById('d-secret-add') as HTMLButtonElement;
 const dSave = document.getElementById('d-save') as HTMLButtonElement;
-
-/** Persist a conversation's structured log; failures surface as a toast. */
-function persistConversation(session: Session): void {
-  if (!session.agentId || !bridge) return;
-  if (session === mountedSession) session.draft = prompt.value;
-  void bridge
-    .convoSave(session.agentId, {
-      log: session.log,
-      usage: session.usage,
-      lastActiveAt: session.lastActiveAt,
-      turns: session.turns,
-      draft: session.draft ?? '',
-    })
-    .catch((err: Error) => showToast(`Couldn't save "${session.title}": ${err.message}`));
-}
-
-const persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-/** Debounced mid-turn save so a crash loses seconds, not the whole exchange. */
-function schedulePersist(session: Session): void {
-  if (!session.agentId) return;
-  const key = session.agentId;
-  if (persistTimers.has(key)) return;
-  persistTimers.set(
-    key,
-    setTimeout(() => {
-      persistTimers.delete(key);
-      persistConversation(session);
-    }, 2000),
-  );
-}
 
 // Sticky scrolling: follow the stream only while the user is at the bottom.
 let stickToBottom = true;
@@ -162,10 +161,7 @@ document.addEventListener('click', (e) => {
 
 /* ---------- Harness status ---------- */
 
-let lastProviderLabel = 'agent';
-
 function applyStatus(s: HarnessStatus): void {
-  lastProviderLabel = s.agent?.name ?? 'agent';
   envselName.textContent = s.environment?.name ?? 'no environment';
   envselDot.className =
     'dot-mini ' + (s.environment ? (s.environment.status === 'running' ? 'on' : 'off') : '');
@@ -190,7 +186,6 @@ async function refreshStatus(): Promise<void> {
     console.error('status refresh failed', err);
   }
 }
-void refreshStatus();
 
 /* ---------- Dropdown menus (provider / model) ---------- */
 
@@ -214,15 +209,14 @@ function openMenuUp(anchor: HTMLElement, items: MenuItem[], onPick: (value: stri
   menu = el('div', 'model-menu menu-up');
   menu.style.left = `${anchor.offsetLeft}px`;
   for (const entry of items) {
-    const item = el('button', 'model-item' + (entry.active ? ' active' : ''), entry.label);
-    item.type = 'button';
+    const item = button('model-item' + (entry.active ? ' active' : ''), entry.label);
     item.addEventListener('click', () => {
       closeMenu();
       onPick(entry.value);
     });
     menu.appendChild(item);
   }
-  composerEl.appendChild(menu);
+  composer.appendChild(menu);
 }
 
 envselBtn.addEventListener('click', async () => {
@@ -236,8 +230,7 @@ envselBtn.addEventListener('click', async () => {
   items.push({ value: '__manage', label: '⚙ Manage environments…' });
   openMenuUp(envselBtn, items, (value) => {
     if (value === '__manage') {
-      settingsTab = 'envs';
-      return showView('settings');
+      return nav({ view: 'settings', section: 'envs' });
     }
     void bridge.envSelect(value).then(applyStatus);
   });
@@ -248,57 +241,83 @@ document.addEventListener('click', (e) => {
   if (menu && !target.closest('.model-menu') && !target.closest('.picker')) closeMenu();
 });
 
-/* ---------- View switching (chat / environments / providers) ---------- */
+/* ---------- Navigation: the settings modal over the chat ---------- */
 
-type View = 'chat' | 'settings' | 'env-detail' | 'agent-detail';
-type SettingsTab = 'agents' | 'providers' | 'envs';
+// State rules (last-used section, Escape ladder) are pure and tested in
+// src/renderer/nav.ts; this file is the DOM applier.
+let navState: NavState = { view: 'chat', lastSection: 'agents' };
 
-const settingsTabs = document.getElementById('settings-tabs') as HTMLElement;
-let settingsTab: SettingsTab = 'agents';
-
-function showSettingsTab(tab: SettingsTab): void {
-  settingsTab = tab;
-  (document.getElementById('sec-agents') as HTMLElement).classList.toggle('hidden', tab !== 'agents');
-  (document.getElementById('sec-providers') as HTMLElement).classList.toggle('hidden', tab !== 'providers');
-  (document.getElementById('sec-envs') as HTMLElement).classList.toggle('hidden', tab !== 'envs');
-  settingsTabs.querySelectorAll('.tab').forEach((btn) => {
-    btn.classList.toggle('active', (btn as HTMLElement).dataset.tab === tab);
-  });
-  if (tab === 'agents') {
-    void renderAgents();
-  } else if (tab === 'providers') {
-    void renderProviders();
-  } else {
-    void renderEnvs();
+/** The single navigation entry point — every view change goes through here. */
+function nav(target: NavTarget): void {
+  navState = navTransition(navState, target);
+  switch (target.view) {
+    case 'chat':
+    case 'settings':
+      showView(target.view);
+      break;
+    case 'agent-detail':
+      void agentEditor.open(target.agent); // reveals the view once populated
+      break;
+    case 'env-detail':
+      openDetail(target.env);
+      break;
   }
 }
 
-settingsTabs.addEventListener('click', (e) => {
-  const btn = (e.target as HTMLElement).closest('.tab') as HTMLElement | null;
-  if (btn?.dataset.tab) showSettingsTab(btn.dataset.tab as SettingsTab);
-});
+/** Highlights the active section in the sidebar menu (parent section on detail pages). */
+function syncSettingsNavActive(): void {
+  settingsNav.querySelectorAll<HTMLElement>('.nav-item[data-section]').forEach((btn) => {
+    btn.classList.toggle(
+      'active',
+      navState.view !== 'chat' && btn.dataset.section === navState.lastSection,
+    );
+  });
+}
 
-let currentView: View = 'chat';
+function showSettingsSection(section: SettingsSection): void {
+  navState = { ...navState, lastSection: section };
+  secAgents.classList.toggle('hidden', section !== 'agents');
+  secProviders.classList.toggle('hidden', section !== 'providers');
+  secEnvs.classList.toggle('hidden', section !== 'envs');
+  syncSettingsNavActive();
+  if (section === 'agents') {
+    void renderAgents();
+    secAgentsTitle.focus();
+  } else if (section === 'providers') {
+    void renderProviders();
+    secProvidersTitle.focus();
+  } else {
+    void renderEnvs();
+    secEnvsTitle.focus();
+  }
+}
 
 function showView(view: View): void {
-  currentView = view;
-  stage.classList.toggle('hidden', view !== 'chat');
+  // Direct callers (the editor's deferred reveal, openDetail) sync the state.
+  navState = { ...navState, view };
+  const modalOpen = view !== 'chat';
+  // Settings live in a modal over the chat; the stage stays mounted beneath.
+  settingsOverlay.classList.toggle('hidden', !modalOpen);
   settingsView.classList.toggle('hidden', view !== 'settings');
   envDetailView.classList.toggle('hidden', view !== 'env-detail');
   agentDetailView.classList.toggle('hidden', view !== 'agent-detail');
-  // Hidden views must not hold focus or be reachable by AT.
-  stage.inert = view !== 'chat';
+  // Nothing behind or beside the open modal may hold focus or be AT-reachable.
+  stage.inert = modalOpen;
+  sidebarEl.inert = modalOpen;
   settingsView.inert = view !== 'settings';
   envDetailView.inert = view !== 'env-detail';
   agentDetailView.inert = view !== 'agent-detail';
-  openSettingsBtn.classList.toggle('active', view !== 'chat');
+  openSettingsBtn.classList.toggle('active', modalOpen);
+  // Leaving a detail page abandons it (the env delete flow relies on this).
+  if (view !== 'agent-detail') agentEditor.abandon();
+  if (view !== 'env-detail') detailEnvId = null;
+  syncSettingsNavActive();
   if (view === 'settings') {
-    showSettingsTab(settingsTab);
-    settingsBack.focus();
+    showSettingsSection(navState.lastSection);
   } else if (view === 'env-detail') {
-    detailBack.focus();
+    detailTitle.focus();
   } else if (view === 'agent-detail') {
-    agentBack.focus();
+    agentTitle.focus();
   } else {
     stopAuthPoll(); // leaving settings abandons any pending connect poll
     void refreshStatus();
@@ -306,29 +325,30 @@ function showView(view: View): void {
   }
 }
 
-// Escape walks back up the view hierarchy: detail → settings → chat.
+// Escape steps back: detail → its section list → close the modal.
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (palette) return closePalette();
   if (menu) return closeMenu();
-  if (currentView === 'chat' && fullTurn) return closeFullTurn();
-  if (currentView === 'agent-detail') {
-    settingsTab = 'agents';
-    showView('settings');
-  } else if (currentView === 'env-detail') {
-    settingsTab = 'envs';
-    showView('settings');
-  } else if (currentView === 'settings') {
-    showView('chat');
+  const target = escapeTarget(navState);
+  if (!target) {
+    closeFullTurn(); // in chat: dismiss a full-screen turn if one is open
+    return;
   }
+  nav(target);
 });
 
-openSettingsBtn.addEventListener('click', () => showView('settings'));
-settingsBack.addEventListener('click', () => showView('chat'));
-heroCta.addEventListener('click', () => {
-  settingsTab = 'envs';
-  showView('settings');
+openSettingsBtn.addEventListener('click', () => nav({ view: 'settings' }));
+settingsClose.addEventListener('click', () => nav({ view: 'chat' }));
+settingsOverlay.addEventListener('click', (e) => {
+  if (e.target === settingsOverlay) nav({ view: 'chat' }); // backdrop click closes
 });
+settingsNav.addEventListener('click', (e) => {
+  const btn = (e.target as HTMLElement).closest('.nav-item') as HTMLElement | null;
+  const section = btn?.dataset.section as SettingsSection | undefined;
+  if (section) nav({ view: 'settings', section });
+});
+heroCta.addEventListener('click', () => nav({ view: 'settings', section: 'envs' }));
 
 /* ---------- Providers view ---------- */
 
@@ -344,230 +364,156 @@ function stopAuthPoll(): void {
 
 /* ---------- Agents (settings section + detail page) ---------- */
 
-let detailAgentId: string | null = null;
-
 // Monotonic request tokens: rapid tab switches must not land stale content.
-let agentsReq = 0;
-let providersReq = 0;
-let envsReq = 0;
-
-function loadingInto(container: HTMLElement): void {
-  container.setAttribute('aria-busy', 'true');
-  if (!container.children.length) container.appendChild(el('div', 'cards-loading', 'Loading…'));
-}
+const agentsGrid = latestToken();
+const providersGrid = latestToken();
+const envsGrid = latestToken();
 
 async function renderAgents(): Promise<void> {
   if (!bridge) return;
-  const token = ++agentsReq;
+  const token = agentsGrid.next();
   loadingInto(agentCards);
   const infos = await bridge.agentList().catch(() => []);
-  if (token !== agentsReq) return;
+  if (!agentsGrid.isCurrent(token)) return;
   agentCards.removeAttribute('aria-busy');
   agentInfos = infos; // the sidebar roster follows Settings
+  // Renames land everywhere: live conversations retitle, and if the renamed
+  // chat is on screen its header/hero refresh without a remount.
+  for (const renamed of store.syncAgentNames(infos)) {
+    if (renamed === store.getMounted()) syncSessionChrome(renamed);
+  }
   renderRecents();
   agentCards.textContent = '';
   for (const agent of infos) {
-    const card = el('div', 'card clickable');
-    asButton(card, `Configure agent ${agent.name}`);
-    const head = el('div', 'card-head');
-    const title = el('span', 'card-title', agent.name);
-    if (agent.active) title.appendChild(el('span', 'badge-active', 'active'));
-    head.appendChild(title);
-    head.appendChild(el('span', 'card-tag', providerLabel(agent.provider)));
-    card.appendChild(head);
+    const card = cardShell({
+      title: agent.name,
+      active: agent.active,
+      headRight: providerLabel(agent.provider),
+      clickable: {
+        label: `Configure agent ${agent.name}`,
+        onOpen: () => nav({ view: 'agent-detail', agent }),
+      },
+    });
     card.appendChild(
       el(
         'div',
         'card-sub',
-        `${agent.model} · thinking ${agent.thinking}` +
+        `${agent.model} · thinking ${agent.effort}` +
           (agent.systemPrompt.trim() ? ' · custom instructions' : ''),
       ),
     );
 
     const foot = el('div', 'card-foot');
-    const use = el('button', 'btn-ghost', 'Open chat');
-    use.type = 'button';
-    use.addEventListener('click', async (e) => {
+    const use = button('btn-ghost', 'Open chat');
+    use.addEventListener('click', (e) => {
       e.stopPropagation();
-      applyStatus(await bridge.agentSelect(agent.id));
-      openConversation(agent.id);
+      void selectAndOpenChat(agent.id);
     });
     foot.appendChild(use);
-    const remove = el('button', 'btn-ghost danger', 'Delete');
-    remove.type = 'button';
+    const remove = button('btn-ghost danger', 'Delete');
     armDelete(remove, async () => {
       agentMsg.textContent = '';
       try {
         agentInfos = await bridge.agentDelete(agent.id);
-        // The conversation dies with its agent: stop its turn, drop it and
-        // its sub-agent chats, and move off it if it was on screen.
-        const conv = conversations.get(agent.id);
-        if (conv) {
-          if (conv.turnId && harness) harness.interrupt(conv.turnId);
-          conversations.delete(agent.id);
-          for (const child of sessions.filter((c) => c.parentSessionId === conv.id)) {
-            sessions.splice(sessions.indexOf(child), 1);
+        // The conversation dies with its agent — the store interrupts its
+        // turn and drops it plus its sub-agent chats; moving the UI off the
+        // dead chat is this side's job.
+        const conv = store.removeAgent(agent.id);
+        if (conv && (current === conv || current.parentSessionId === conv.id)) {
+          const next = agentInfos[0];
+          if (next) {
+            current = conversationFor(next);
+            hydrate(current);
+          } else {
+            current = freshSession();
           }
-          if (current === conv || current.parentSessionId === conv.id) {
-            const next = agentInfos[0];
-            if (next) {
-              current = conversationFor(next);
-              hydrate(current);
-            } else {
-              current = freshSession();
-            }
-            mountSession(current);
-          }
+          mountSession(current);
         }
         renderRecents();
         await refreshStatus();
       } catch (err) {
-        agentMsg.textContent = err instanceof Error ? err.message : String(err);
+        agentMsg.textContent = errText(err);
       }
       await renderAgents();
     });
     foot.appendChild(remove);
     card.appendChild(foot);
-    card.addEventListener('click', () => openAgentDetail(agent));
     agentCards.appendChild(card);
   }
 
-  const add = el('div', 'card add', '+ New agent');
-  asButton(add);
-  add.addEventListener('click', async () => {
-    agentMsg.textContent = '';
-    try {
-      const list = await bridge.agentCreate({
-        name: 'New agent',
-        provider: (await loadProviders())[0]?.id ?? '',
-        model: 'auto',
-        systemPrompt: '',
-        thinking: 'auto',
-        advanced: '',
-      });
-      const newest = list[list.length - 1];
-      if (newest) openAgentDetail(newest);
-    } catch (err) {
-      agentMsg.textContent = err instanceof Error ? err.message : String(err);
-    }
-  });
-  agentCards.appendChild(add);
+  agentCards.appendChild(
+    addCard('+ New agent', async () => {
+      agentMsg.textContent = '';
+      try {
+        const list = await bridge.agentCreate({
+          name: 'New agent',
+          provider: (await loadProviders())[0]?.id ?? '',
+          model: 'auto',
+          systemPrompt: '',
+          effort: 'auto',
+          options: {},
+          advanced: '',
+        });
+        const newest = list[list.length - 1];
+        if (newest) nav({ view: 'agent-detail', agent: newest });
+      } catch (err) {
+        agentMsg.textContent = errText(err);
+      }
+    }),
+  );
 }
 
-/** Populates provider-dependent controls (models datalist, thinking levels). */
-async function syncAgentProviderFields(providerId: string, selectedThinking: string): Promise<void> {
-  const infos = await loadProviders();
-  const info = infos.find((p) => p.id === providerId);
-  aModelOptions.textContent = '';
-  for (const m of info?.models ?? ['auto']) {
-    const opt = document.createElement('option');
-    opt.value = m;
-    aModelOptions.appendChild(opt);
-  }
-  aThinking.textContent = '';
-  for (const level of info?.thinkingLevels ?? ['auto']) {
-    const opt = document.createElement('option');
-    opt.value = level;
-    opt.textContent = level;
-    if (level === selectedThinking) opt.selected = true;
-    aThinking.appendChild(opt);
-  }
-  aSystemHint.textContent = info?.systemPromptHint ?? '';
-}
 
-function renderAgentHeader(agent: { id: string; name: string; active: boolean }): void {
-  agentTitle.textContent = agent.name;
-  agentStatus.textContent = '';
-  if (agent.active) agentStatus.appendChild(el('span', 'badge-active', 'active'));
-  agentControls.textContent = '';
-  if (bridge) {
-    const use = el('button', 'btn-ghost', 'Open chat');
-    use.type = 'button';
-    use.addEventListener('click', async () => {
-      applyStatus(await bridge.agentSelect(agent.id));
-      openConversation(agent.id);
-    });
-    agentControls.appendChild(use);
-  }
-}
-
-async function openAgentDetail(agent: {
-  id: string;
-  name: string;
-  provider: string;
-  model: string;
-  systemPrompt: string;
-  thinking: string;
-  advanced: string;
-  active: boolean;
-}): Promise<void> {
-  detailAgentId = agent.id;
-  agentDetailMsg.textContent = '';
-  aName.value = agent.name;
-  aProvider.textContent = '';
-  for (const info of await loadProviders()) {
-    const opt = document.createElement('option');
-    opt.value = info.id;
-    opt.textContent = info.label;
-    if (info.id === agent.provider) opt.selected = true;
-    aProvider.appendChild(opt);
-  }
-  aModel.value = agent.model;
-  aSystem.value = agent.systemPrompt;
-  aAdvanced.value = agent.advanced;
-  await syncAgentProviderFields(agent.provider, agent.thinking);
-  renderAgentHeader(agent);
-  showView('agent-detail');
-}
-
-aProvider.addEventListener('change', () => {
-  void syncAgentProviderFields(aProvider.value, 'auto');
-  aModel.value = 'auto';
-});
-
-aSave.addEventListener('click', async () => {
-  if (!bridge || !detailAgentId) return;
-  agentDetailMsg.textContent = '';
-  aSave.disabled = true;
-  try {
-    const list = await bridge.agentUpdate(detailAgentId, {
-      name: aName.value,
-      provider: aProvider.value,
-      model: aModel.value,
-      systemPrompt: aSystem.value,
-      thinking: aThinking.value,
-      advanced: aAdvanced.value,
-    });
-    const currentAgent = list.find((a) => a.id === detailAgentId);
-    if (currentAgent) renderAgentHeader(currentAgent);
-    await refreshStatus();
-    flashSaved(aSave);
-  } catch (err) {
-    agentDetailMsg.textContent = err instanceof Error ? err.message : String(err);
-  }
-  aSave.disabled = false;
-});
-
-agentBack.addEventListener('click', () => {
-  detailAgentId = null;
-  settingsTab = 'agents';
-  showView('settings');
+// The agent editor owns its form, dirty tracking, section rail, and save
+// flow (src/renderer/settings/agent-editor.ts); this file hands it the DOM.
+const agentEditor = initAgentEditor({
+  bridge,
+  loadProviders,
+  showView: () => showView('agent-detail'),
+  navToAgents: () => nav({ view: 'settings', section: 'agents' }),
+  refreshStatus,
+  openAgentChat: (agentId) => void selectAndOpenChat(agentId),
+  els: {
+    view: agentDetailView,
+    title: agentTitle,
+    status: agentStatus,
+    controls: agentControls,
+    msg: agentDetailMsg,
+    back: agentBack,
+    name: aName,
+    provider: aProvider,
+    modelSeg: aModelSeg,
+    model: aModel,
+    thinkingSeg: aThinkingSeg,
+    system: aSystem,
+    systemHint: aSystemHint,
+    options: aOptions,
+    advanced: aAdvanced,
+    advancedWarn: aAdvancedWarn,
+    save: aSave,
+    nav: agentNav,
+    editorMain: agentEditorMain,
+    dirty: agentDirty,
+    identityCard: aedIdentity,
+    identityModBadge: aIdentityMod,
+    instructionsCard: aedInstructions,
+    advancedCard: aedAdvanced,
+  },
 });
 
 async function renderProviders(): Promise<void> {
   if (!bridge) return;
-  const token = ++providersReq;
+  const token = providersGrid.next();
   loadingInto(providerCards);
   const infos = await loadProviders();
-  if (token !== providersReq) return;
+  if (!providersGrid.isCurrent(token)) return;
   providerCards.removeAttribute('aria-busy');
   providerCards.textContent = '';
   for (const info of infos) {
-    const card = el('div', 'card');
-    const head = el('div', 'card-head');
-    head.appendChild(el('span', 'card-title', info.label));
-    head.appendChild(statusEl(info.auth.connected, info.auth.connected ? 'connected' : 'offline'));
-    card.appendChild(head);
+    const card = cardShell({
+      title: info.label,
+      headRight: statusEl(info.auth.connected, info.auth.connected ? 'connected' : 'offline'),
+    });
     card.appendChild(
       el(
         'div',
@@ -579,8 +525,7 @@ async function renderProviders(): Promise<void> {
     );
 
     const foot = el('div', 'card-foot');
-    const btn = el('button', 'btn-ghost', info.auth.connected ? 'Disconnect' : 'Connect');
-    btn.type = 'button';
+    const btn = button('btn-ghost', info.auth.connected ? 'Disconnect' : 'Connect');
     btn.addEventListener('click', async () => {
       btn.disabled = true;
       providerMsg.textContent = '';
@@ -609,7 +554,7 @@ async function renderProviders(): Promise<void> {
           }, 2000);
         }
       } catch (err) {
-        providerMsg.textContent = err instanceof Error ? err.message : String(err);
+        providerMsg.textContent = errText(err);
       }
       await renderProviders();
     });
@@ -624,29 +569,31 @@ async function renderProviders(): Promise<void> {
 let detailEnvId: string | null = null;
 let detailEnvVars: Record<string, string> = {};
 
-async function refreshAfterEnvOp(): Promise<void> {
-  await renderEnvs();
-  await refreshStatus();
-}
-
-async function renderEnvs(): Promise<EnvironmentInfo[]> {
-  if (!bridge) return [];
-  const token = ++envsReq;
+async function renderEnvs(): Promise<void> {
+  if (!bridge) return;
+  const token = envsGrid.next();
   loadingInto(envCards); // envList shells out to docker — visibly slow
   const envs = await bridge.envList().catch(() => [] as EnvironmentInfo[]);
-  if (token !== envsReq) return envs;
+  if (!envsGrid.isCurrent(token)) return;
+  renderEnvsFrom(envs);
+}
+
+/** Renders a known list — env ops feed their returned list here instead of
+ *  paying a second round of per-container docker probes. */
+function renderEnvsFrom(envs: EnvironmentInfo[]): void {
+  if (!bridge) return;
   envCards.removeAttribute('aria-busy');
   envCards.textContent = '';
   for (const env of envs) {
-    const card = el('div', 'card clickable');
-    asButton(card, `Configure environment ${env.name}`);
-
-    const head = el('div', 'card-head');
-    const title = el('span', 'card-title', env.name);
-    if (env.active) title.appendChild(el('span', 'badge-active', 'active'));
-    head.appendChild(title);
-    head.appendChild(statusEl(env.status === 'running', env.status));
-    card.appendChild(head);
+    const card = cardShell({
+      title: env.name,
+      active: env.active,
+      headRight: statusEl(env.status === 'running', env.status),
+      clickable: {
+        label: `Configure environment ${env.name}`,
+        onOpen: () => nav({ view: 'env-detail', env }),
+      },
+    });
     card.appendChild(
       el(
         'div',
@@ -656,95 +603,54 @@ async function renderEnvs(): Promise<EnvironmentInfo[]> {
     );
 
     const foot = el('div', 'card-foot');
-    const runOp = async (btn: HTMLButtonElement, fn: () => Promise<void>) => {
-      foot.querySelectorAll('button').forEach((b) => (b.disabled = true)); // one op at a time
-      btn.textContent = '…';
-      envMsg.textContent = '';
-      try {
-        await fn();
-      } catch (err) {
-        envMsg.textContent = err instanceof Error ? err.message : String(err);
-      }
-      await refreshAfterEnvOp();
-    };
-    const action = (label: string, fn: () => Promise<void>) => {
-      const btn = el('button', 'btn-ghost', label);
-      btn.type = 'button';
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation(); // don't open the detail page
-        void runOp(btn, fn);
-      });
-      foot.appendChild(btn);
-    };
-
-    if (!env.active) {
-      action('Select', async () => {
-        applyStatus(await bridge.envSelect(env.id));
-      });
-    }
-    if (env.status === 'running') {
-      action('Stop', async () => {
-        await bridge.envStop(env.id);
-      });
-      action('Restart', async () => {
-        await bridge.envRestart(env.id);
-      });
-      action('Rebuild', async () => {
-        await bridge.envRebuild(env.id);
-      });
-    } else {
-      action('Start', async () => {
-        await bridge.envStart(env.id);
-      });
-      action('Rebuild', async () => {
-        await bridge.envRebuild(env.id);
-      });
-      const del = el('button', 'btn-ghost danger', 'Delete');
-      del.type = 'button';
-      armDelete(del, () =>
-        runOp(del, async () => {
-          if (detailEnvId === env.id) detailEnvId = null;
-          await bridge.envDelete(env.id);
-        }),
-      );
-      foot.appendChild(del);
-    }
-
+    envOpRail(foot, env, {
+      bridge,
+      applyStatus,
+      stopPropagation: true, // rail clicks must not open the detail page
+      message: (text) => {
+        envMsg.textContent = text;
+      },
+      onSettled: async (latest) => {
+        if (latest) renderEnvsFrom(latest);
+        else await renderEnvs();
+        await refreshStatus();
+      },
+      onDelete: (target) => {
+        if (detailEnvId === target.id) detailEnvId = null;
+        return bridge.envDelete(target.id);
+      },
+    });
     card.appendChild(foot);
-    card.addEventListener('click', () => openDetail(env));
     envCards.appendChild(card);
   }
 
   // Dashed add-card creates an environment and opens its page for configuring.
-  const add = el('div', 'card add', '+ New environment');
-  asButton(add);
-  add.addEventListener('click', async () => {
-    envMsg.textContent = '';
-    try {
-      const list = await bridge.envCreate({
-        name: `env-${Date.now().toString(36).slice(-4)}`,
-        image: 'node:22-bookworm',
-        workspacePath: '',
-        autoInstall: true,
-        dockerfile: '',
-        envVars: {},
-      });
-      const newest = list[list.length - 1];
-      if (newest) openDetail(newest);
-    } catch (err) {
-      envMsg.textContent = err instanceof Error ? err.message : String(err);
-    }
-  });
-  envCards.appendChild(add);
-  return envs;
+  envCards.appendChild(
+    addCard('+ New environment', async () => {
+      envMsg.textContent = '';
+      try {
+        const list = await bridge.envCreate({
+          name: `env-${Date.now().toString(36).slice(-4)}`,
+          image: 'node:22-bookworm',
+          workspacePath: '',
+          autoInstall: true,
+          dockerfile: '',
+          envVars: {},
+        });
+        const newest = list[list.length - 1];
+        if (newest) nav({ view: 'env-detail', env: newest });
+      } catch (err) {
+        envMsg.textContent = errText(err);
+      }
+    }),
+  );
 }
 
 function kvRow(key: string, value: string, onRemove: () => void): HTMLElement {
   const row = el('div', 'kv-row');
   row.appendChild(el('span', 'kv-key', key));
   row.appendChild(el('span', 'kv-val', value));
-  const remove = el('button', 'kv-remove', '✕');
-  remove.type = 'button';
+  const remove = button('kv-remove', '✕');
   remove.addEventListener('click', onRemove);
   row.appendChild(remove);
   return row;
@@ -784,63 +690,26 @@ function renderDetailHeader(env: EnvironmentInfo): void {
   if (env.active) detailStatus.appendChild(el('span', 'badge-active', 'active'));
 
   detailControls.textContent = '';
-  const runOp = async (btn: HTMLButtonElement, fn: () => Promise<void>) => {
-    detailControls.querySelectorAll('button').forEach((b) => (b.disabled = true));
-    btn.textContent = '…';
-    detailMsg.textContent = '';
-    try {
-      await fn();
-    } catch (err) {
-      detailMsg.textContent = err instanceof Error ? err.message : String(err);
-    }
-    await refreshStatus();
-    if (!detailEnvId) return; // deleted — already navigated back
-    const latest = (await bridge?.envList().catch(() => [])) ?? [];
-    const current = latest.find((e) => e.id === detailEnvId);
-    if (current) renderDetailHeader(current);
-  };
-  const control = (label: string, fn: () => Promise<void>) => {
-    const btn = el('button', 'btn-ghost', label);
-    btn.type = 'button';
-    btn.addEventListener('click', () => void runOp(btn, fn));
-    detailControls.appendChild(btn);
-  };
-
   if (!bridge) return;
-  if (!env.active) {
-    control('Select', async () => {
-      applyStatus(await bridge.envSelect(env.id));
-    });
-  }
-  if (env.status === 'running') {
-    control('Stop', async () => {
-      await bridge.envStop(env.id);
-    });
-    control('Restart', async () => {
-      await bridge.envRestart(env.id);
-    });
-    control('Rebuild', async () => {
-      await bridge.envRebuild(env.id);
-    });
-  } else {
-    control('Start', async () => {
-      await bridge.envStart(env.id);
-    });
-    control('Rebuild', async () => {
-      await bridge.envRebuild(env.id);
-    });
-    const del = el('button', 'btn-ghost danger', 'Delete');
-    del.type = 'button';
-    armDelete(del, () =>
-      runOp(del, async () => {
-        await bridge.envDelete(env.id);
-        detailEnvId = null;
-        settingsTab = 'envs';
-        showView('settings');
-      }),
-    );
-    detailControls.appendChild(del);
-  }
+  envOpRail(detailControls, env, {
+    bridge,
+    applyStatus,
+    message: (text) => {
+      detailMsg.textContent = text;
+    },
+    onSettled: async (latest) => {
+      await refreshStatus();
+      if (!detailEnvId) return; // deleted — already navigated back
+      const list = latest ?? ((await bridge.envList().catch(() => [])) as EnvironmentInfo[]);
+      const shown = list.find((e) => e.id === detailEnvId);
+      if (shown) renderDetailHeader(shown);
+    },
+    onDelete: async (target) => {
+      const out = await bridge.envDelete(target.id);
+      nav({ view: 'settings', section: 'envs' }); // showView clears detailEnvId
+      return out;
+    },
+  });
 }
 
 /** Navigates to the environment's dedicated page. */
@@ -859,11 +728,7 @@ function openDetail(env: EnvironmentInfo): void {
   showView('env-detail');
 }
 
-detailBack.addEventListener('click', () => {
-  detailEnvId = null;
-  settingsTab = 'envs';
-  showView('settings');
-});
+detailBack.addEventListener('click', () => nav({ view: 'settings', section: 'envs' }));
 
 dEnvAdd.addEventListener('click', () => {
   const key = dEnvKey.value.trim();
@@ -886,7 +751,7 @@ dSecretAdd.addEventListener('click', async () => {
     const current = envs.find((e) => e.id === detailEnvId);
     renderDetailSecrets(current?.secretKeys ?? []);
   } catch (err) {
-    detailMsg.textContent = err instanceof Error ? err.message : String(err);
+    detailMsg.textContent = errText(err);
   }
 });
 
@@ -908,171 +773,92 @@ dSave.addEventListener('click', async () => {
     await refreshStatus();
     flashSaved(dSave);
   } catch (err) {
-    detailMsg.textContent = err instanceof Error ? err.message : String(err);
+    detailMsg.textContent = errText(err);
   }
   dSave.disabled = false;
 });
 
 /* ---------- Sessions ---------- */
 
-/**
- * Slack-style model: each configured agent has ONE long-lived conversation.
- * Every conversation owns a LIVE detached thread node — turns keep streaming
- * into it while other conversations are on screen. Mounting just swaps which
- * thread is attached to the chat scroller. Sub-agent chats are child sessions
- * nested under the conversation that spawned them.
- */
-interface Session {
-  /** Set on agent conversations: which configured agent this chat belongs to. */
-  agentId?: string;
-  /** Structured history — the persisted source of truth for this chat. */
-  log: ConversationEntry[];
-  id: number;
-  title: string;
-  thread: HTMLOListElement;
-  usage: number;
-  provider: string;
-  turns: number;
-  createdAt: number;
-  lastActiveAt: number;
-  running: boolean;
-  /** In-flight turn id, for routing interrupt / question answers. */
-  turnId: string | null;
-  /** Something happened while this session was in the background. */
-  unread: 'done' | 'error' | 'ask' | null;
-  /** Unrendered history — replayed lazily on first open (boot stays fast). */
-  pendingLog?: ConversationEntry[];
-  /** Composer draft, private to this conversation. */
-  draft?: string;
-  /** Scroll state, restored when the conversation is remounted. */
-  scrollPos?: number;
-  stick?: boolean;
-  /**
-   * Tool cards across ALL turns in this session, so a sub-agent resumed in a
-   * later turn (SendMessage) streams into its original card.
-   */
-  tools: Map<string, HTMLElement>;
-  toolStarts: Map<string, number>;
-  /** Set on sub-agent chats: the session this agent was spawned from. */
-  parentSessionId?: number;
-  /** Sub-agent chats spawned from this session, keyed by their Task toolId. */
-  agents: Map<string, AgentThread>;
-}
-
-interface AgentThread {
-  child: Session;
-  childTurn: ReturnType<typeof addAssistantTurn>;
-  /** True once the sub-agent's own text streamed in (avoids double reports). */
-  sawText: boolean;
-}
-
-/** Sub-agent chats (children). Agent conversations live in `conversations`. */
-const sessions: Session[] = [];
-let nextSessionId = 1;
 let agentInfos: AgentInfo[] = [];
-const conversations = new Map<string, Session>();
 
-function freshSession(): Session {
-  const now = Date.now();
-  return {
-    id: nextSessionId++,
-    title: 'Untitled session',
-    thread: el('ol', 'thread'),
-    usage: 0,
-    provider: lastProviderLabel,
-    turns: 0,
-    createdAt: now,
-    lastActiveAt: now,
-    running: false,
-    turnId: null,
-    unread: null,
-    tools: new Map(),
-    toolStarts: new Map(),
-    agents: new Map(),
-    log: [],
-  };
-}
+// The session model lives in the store (src/renderer/session-store.ts);
+// the rendering layer lives in chat-view. This file wires them to the DOM,
+// the bridge, and each other.
+const store = createSessionStore({
+  interrupt: (turnId) => {
+    if (harness) harness.interrupt(turnId);
+  },
+  save: (agentId, data) => (bridge ? bridge.convoSave(agentId, data) : Promise.resolve()),
+  onSaveError: (session, err) => showToast(`Couldn't save "${session.title}": ${err.message}`),
+  currentDraft: () => prompt.value,
+});
+const { conversations } = store;
+const freshSession = store.freshSession;
+const conversationFor = store.conversationFor;
+const persistConversation = store.persist;
+const schedulePersist = store.schedulePersist;
 
-/** Keep a sub-agent chat's liveness fresh as its activity streams in. */
-function bumpAgent(child: Session): void {
-  child.lastActiveAt = Date.now();
-  if (!child.running) {
-    child.running = true;
-    renderRecents();
-  }
-}
+const chatView = initChatView({
+  userName: USER_NAME,
+  scrollChat,
+  answerAsk: (turnId, askId, answers) =>
+    harness ? harness.answerAsk(turnId, askId, answers) : Promise.resolve(),
+  toast: showToast,
+  schedulePersist,
+  rosterChanged: renderRecents,
+  isCurrent: (session) => session === current,
+  openSession,
+  spawnChild: store.spawnChild,
+  pruneChildren: store.dropChildren,
+  overlay: {
+    body: turnFullBody,
+    crumb: turnFullCrumb,
+    title: turnFullTitle,
+    stage,
+    backButton: turnFullBack,
+  },
+});
+const { addUserMessage, addAssistantTurn, hydrate, closeFullTurn } = chatView;
 
-/** The one permanent conversation for a configured agent. */
-function conversationFor(info: AgentInfo): Session {
-  let conv = conversations.get(info.id);
-  if (!conv) {
-    conv = freshSession();
-    conv.agentId = info.id;
-    conv.provider = providerLabel(info.provider);
-    conversations.set(info.id, conv);
-  }
-  conv.title = info.name; // follows renames in Settings
-  return conv;
+/** Bring a session on screen in the chat view. */
+function showSession(session: Session): void {
+  nav({ view: 'chat' });
+  if (session === current) return;
+  current = session;
+  session.unread = null;
+  hydrate(session); // no-op for sub-agent chats (nothing pending)
+  mountSession(session);
+  renderRecents();
+  prompt.focus();
 }
 
 function openConversation(agentId: string): void {
   const info = agentInfos.find((a) => a.id === agentId);
-  if (!info) return;
-  const conv = conversationFor(info);
-  showView('chat');
-  if (conv === current) return;
-  current = conv;
-  conv.unread = null;
-  hydrate(conv);
-  mountSession(conv);
-  renderRecents();
-  prompt.focus();
+  if (info) showSession(conversationFor(info));
+}
+
+/** Make an agent the active one (main tracks it) and open its chat. */
+async function selectAndOpenChat(agentId: string): Promise<void> {
+  if (!bridge) return;
+  applyStatus(await bridge.agentSelect(agentId));
+  openConversation(agentId);
 }
 
 
 let current: Session = freshSession();
 
 
-/** Full-screen turn detail: the detail node is MOVED into the overlay and
- *  returned home on back, so live streaming keeps rendering either way. */
-let fullTurn: { detail: HTMLElement; home: HTMLElement } | null = null;
-let lastFullTrigger: HTMLElement | null = null;
-
-function openFullTurn(session: Session, detail: HTMLElement, title: string): void {
-  closeFullTurn();
-  fullTurn = { detail, home: detail.parentElement as HTMLElement };
-  turnFullBody.appendChild(detail);
-  turnFullCrumb.textContent = session.title;
-  turnFullTitle.textContent = title;
-  stage.classList.add('turn-full-open');
-  turnFullBack.focus();
-}
-
-function closeFullTurn(): void {
-  if (!fullTurn) return;
-  fullTurn.home.appendChild(fullTurn.detail);
-  fullTurn = null;
-  stage.classList.remove('turn-full-open');
-  lastFullTrigger?.focus();
-  lastFullTrigger = null;
-}
-
-/** Follow live output when the growing turn is the one open full screen. */
-function detailFollow(node: HTMLElement): void {
-  if (fullTurn?.detail.contains(node)) turnFullBody.scrollTop = turnFullBody.scrollHeight;
-}
-
-let mountedSession: Session | null = null;
-
 /** Swap the chat scroller over to a session's live thread. */
 function mountSession(session: Session): void {
-  if (mountedSession && mountedSession !== session) {
+  const prev = store.getMounted();
+  if (prev && prev !== session) {
     // Draft and scroll state are per conversation — never leak across agents.
-    mountedSession.draft = prompt.value;
-    mountedSession.scrollPos = chat.scrollTop;
-    mountedSession.stick = stickToBottom;
+    prev.draft = prompt.value;
+    prev.scrollPos = chat.scrollTop;
+    prev.stick = stickToBottom;
   }
-  mountedSession = session;
+  store.setMounted(session);
   chat.querySelector('.thread')?.remove();
   chat.appendChild(session.thread);
   closeFullTurn(); // full-screen detail belongs to the previous view
@@ -1081,6 +867,11 @@ function mountSession(session: Session): void {
   stickToBottom = session.stick ?? true;
   chat.scrollTop = stickToBottom ? chat.scrollHeight : session.scrollPos ?? 0;
   stage.classList.toggle('empty', !session.thread.children.length);
+  syncSessionChrome(session);
+}
+
+/** Chat header, hero, and composer text derived from the session's title. */
+function syncSessionChrome(session: Session): void {
   const isChild = session.parentSessionId !== undefined;
   const info = session.agentId ? agentInfos.find((a) => a.id === session.agentId) : undefined;
   chatHeadName.textContent = session.title;
@@ -1096,38 +887,8 @@ function mountSession(session: Session): void {
   syncComposer();
 }
 
-/** Slack-style day separator, inserted when the calendar day changes. The
- *  last label lives in a dataset attribute — no DOM scan per message. */
-function maybeDayDivider(container: HTMLElement, ts = Date.now()): void {
-  const label = dayLabel(ts);
-  if (container.dataset.day === label) return;
-  container.dataset.day = label;
-  const divider = el('li', 'day-divider');
-  divider.appendChild(el('span', 'day-chip', label));
-  container.appendChild(divider);
-}
-
-/** One Slack-style message row: avatar gutter, author + time, content below. */
-function messageRow(
-  kind: 'user' | 'agent',
-  author: string,
-  ts = Date.now(),
-): { item: HTMLLIElement; body: HTMLElement } {
-  const item = el('li', `msg-row ${kind}`);
-  item.dataset.author = author;
-  item.dataset.ts = String(ts);
-  item.dataset.groupStart = String(ts); // the header's time never slides
-  const main = el('div', 'row-main');
-  const head = el('div', 'row-head');
-  head.append(el('span', 'row-author', author), el('span', 'row-time', fmtTime(ts)));
-  const body = el('div', 'row-body');
-  main.append(head, body);
-  item.append(el('span', `row-avatar ${kind}`, (author[0] ?? '?').toUpperCase()), main);
-  return { item, body };
-}
-
 function sessionSnippet(session: Session): string {
-  const parts = session.thread.querySelectorAll('.prose, .bubble, .error-block');
+  const parts = session.thread.querySelectorAll('.prose, .error-block');
   const last = parts.length ? (parts[parts.length - 1].textContent ?? '') : '';
   return last.split(/\s+/).join(' ').trim().slice(0, 120);
 }
@@ -1162,12 +923,7 @@ function renderRecentsNow(): void {
   for (const info of agentInfos) {
     const conv = conversations.get(info.id);
     const item = el('li', 'recent-item');
-    const btn = el(
-      'button',
-      'recent agent-row' + (conv && conv === current ? ' active' : ''),
-      info.name,
-    );
-    btn.type = 'button';
+    const btn = button('recent agent-row' + (conv && conv === current ? ' active' : ''), info.name);
     btn.title =
       providerLabel(info.provider) +
       (conv && conv.turns > 0
@@ -1179,11 +935,9 @@ function renderRecentsNow(): void {
     if (state) item.appendChild(statusDot(state));
     if (conv?.running && conv.turnId) {
       // Background turns are stoppable from the roster, not just when open.
-      const stopBtn = el('button', 'recent-stop');
-      stopBtn.type = 'button';
+      const stopBtn = button('recent-stop');
       stopBtn.title = `Stop ${info.name}'s turn`;
-      stopBtn.innerHTML =
-        '<svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>';
+      stopBtn.innerHTML = STOP_ICON;
       stopBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         if (conv.turnId && harness) harness.interrupt(conv.turnId);
@@ -1194,14 +948,9 @@ function renderRecentsNow(): void {
 
     // Sub-agent chats, nested under the conversation that spawned them.
     if (!conv) continue;
-    for (const child of sessions.filter((c) => c.parentSessionId === conv.id)) {
+    for (const child of store.childrenOf(conv)) {
       const childItem = el('li', 'recent-item child');
-      const childBtn = el(
-        'button',
-        'recent' + (child.id === current.id ? ' active' : ''),
-        child.title,
-      );
-      childBtn.type = 'button';
+      const childBtn = button('recent' + (child.id === current.id ? ' active' : ''), child.title);
       childBtn.title = sessionSnippet(child) || child.title;
       childBtn.addEventListener('click', () => openSession(child.id));
       childItem.appendChild(childBtn);
@@ -1214,507 +963,12 @@ function renderRecentsNow(): void {
 
 /** Open a sub-agent chat by its session id. */
 function openSession(id: number): void {
-  showView('chat');
-  const target = sessions.find((s) => s.id === id);
-  if (!target || target === current) return;
-  current = target;
-  target.unread = null;
-  mountSession(target);
-  renderRecents();
-  prompt.focus();
-}
-
-/* ---------- Message rendering ---------- */
-
-function addUserMessage(session: Session, text: string, author = USER_NAME, ts = Date.now()): void {
-  // Sub-agent chats title themselves from their task; agent conversations
-  // keep the agent's name.
-  if (!session.agentId && !session.thread.children.length) {
-    const clean = text.split(/\s+/).join(' ').trim();
-    if (clean.length <= 48) {
-      session.title = clean;
-    } else {
-      const cut = clean.lastIndexOf(' ', 48);
-      session.title = `${clean.slice(0, cut > 24 ? cut : 48)}…`;
-    }
-  }
-  // Slack-style grouping: rapid consecutive messages share one header —
-  // capped at 15 minutes from the group's start (the sliding 5-minute
-  // window alone never breaks), and never across midnight.
-  const last = session.thread.lastElementChild as HTMLElement | null;
-  const groupStart = Number(last?.dataset.groupStart ?? 0);
-  if (
-    last?.classList.contains('msg-row') &&
-    last.dataset.author === author &&
-    ts - Number(last.dataset.ts) < 300_000 &&
-    ts - groupStart < 900_000 &&
-    dayLabel(ts) === dayLabel(groupStart)
-  ) {
-    last.dataset.ts = String(ts);
-    const grouped = el('div', 'row-body prose');
-    grouped.innerHTML = renderMd(text);
-    last.querySelector('.row-main')?.appendChild(grouped);
-  } else {
-    maybeDayDivider(session.thread, ts);
-    const { item, body } = messageRow(author === USER_NAME ? 'user' : 'agent', author, ts);
-    body.classList.add('prose');
-    body.innerHTML = renderMd(text);
-    session.thread.appendChild(item);
-  }
-  if (session.thread.isConnected) scrollChat(true);
-}
-
-/** Builds one assistant turn inside a session's thread (which may be off-screen). */
-function addAssistantTurn(session: Session, turnId: string, ts = Date.now()) {
-  // Only move the visible scroller when this session is the one on screen.
-  const scrollToBottom = (force = false): void => {
-    if (session.thread.isConnected) scrollChat(force);
-  };
-  maybeDayDivider(session.thread, ts);
-  const { item, body: content } = messageRow('agent', session.title, ts);
-  session.thread.appendChild(item);
-
-  // Text-only turns are just messages. The first tool call reveals ONE dynamic
-  // card; clicking it opens the turn's full detail with breadcrumbs back.
-  const turnWork = el('div', 'turn-detail');
-  const detailTitle = `Turn · ${fmtTime(ts)}`;
-  let steps = 0;
-  const turnCard = el('button', 'turn-card running hidden');
-  turnCard.type = 'button';
-  turnCard.title = 'Open turn detail';
-  const cardDot = el('span', 'turn-card-dot');
-  const cardLabel = el('span', 'turn-card-label', 'Working…');
-  const cardLatest = el('span', 'turn-card-latest', '');
-  const cardExpand = el('span', 'turn-card-expand');
-  cardExpand.innerHTML =
-    '<svg viewBox="0 0 24 24"><path d="M15 3h6v6" /><path d="M9 21H3v-6" /><path d="m21 3-7 7" /><path d="m3 21 7-7" /></svg>';
-  turnCard.append(cardDot, cardLabel, cardLatest, cardExpand);
-  turnCard.addEventListener('click', () => {
-    lastFullTrigger = turnCard;
-    openFullTurn(session, turnWork, detailTitle);
-  });
-  item.querySelector('.row-main')?.append(turnCard, turnWork);
-
-  const workAppend = (node: HTMLElement, stepLabel?: string): void => {
-    turnWork.appendChild(node);
-    if (stepLabel) {
-      steps += 1;
-      cardLabel.textContent = `Working · ${steps} step${steps === 1 ? '' : 's'}`;
-      cardLatest.textContent = stepLabel;
-    }
-    if (turnCard.classList.contains('hidden')) {
-      turnCard.classList.remove('hidden');
-      scrollToBottom();
-    }
-    detailFollow(node);
-  };
-
-  let prose: HTMLElement | null = null;
-  let proseRaw = '';
-  let proseCommitted: HTMLElement | null = null;
-  let proseTail: HTMLElement | null = null;
-  let commitAt = 0;
-  let flushQueued = false;
-
-  // Re-parsing the whole reply per token is quadratic. Instead: text before
-  // the last completed paragraph renders once into a "committed" node (only
-  // when a new paragraph lands, and never inside an open code fence), and
-  // each animation frame re-renders just the small trailing chunk.
-  const fenceClosed = (s: string): boolean => ((s.match(/```/g) ?? []).length & 1) === 0;
-  const flushProse = (): void => {
-    flushQueued = false;
-    if (!prose || !proseCommitted || !proseTail) return;
-    const brk = proseRaw.lastIndexOf('\n\n');
-    if (brk >= 0 && brk + 2 > commitAt && fenceClosed(proseRaw.slice(0, brk))) {
-      commitAt = brk + 2;
-      proseCommitted.innerHTML = renderMd(proseRaw.slice(0, commitAt));
-    }
-    proseTail.innerHTML = renderMd(proseRaw.slice(commitAt));
-    scrollToBottom();
-  };
-
-  let thinking: HTMLElement | null = null;
-  const tools = session.tools; // session-scoped: resumed sub-agents span turns
-  const toolStarts = session.toolStarts;
-  const turnToolIds: string[] = []; // pruned when the turn settles (DOM refs!)
-  const openAsks: HTMLElement[] = [];
-
-  function closeAsks(): void {
-    for (const card of openAsks.splice(0)) {
-      card.classList.add('answered');
-      card.querySelectorAll('button, input').forEach((n) => {
-        (n as HTMLButtonElement | HTMLInputElement).disabled = true;
-      });
-    }
-  }
-
-  return {
-    setThinking(active: boolean, label = 'Thinking…') {
-      if (active && !thinking) {
-        thinking = el('div', 'thinking');
-        thinking.append(
-          el('span', 'thinking-dot'),
-          el('span', 'thinking-dot'),
-          el('span', 'thinking-dot'),
-          el('span', 'thinking-label', label),
-        );
-        content.appendChild(thinking);
-      } else if (!active && thinking) {
-        thinking.remove();
-        thinking = null;
-      }
-      scrollToBottom();
-    },
-
-    appendText(delta: string, parentId?: string) {
-      // A sub-agent's text belongs in its own chat thread.
-      if (parentId) {
-        const agentThread = session.agents.get(parentId);
-        if (agentThread) {
-          agentThread.sawText = true;
-          agentThread.childTurn.appendText(delta);
-          bumpAgent(agentThread.child);
-          return;
-        }
-      }
-      this.setThinking(false);
-      if (!prose) {
-        prose = el('div', 'prose');
-        proseCommitted = el('div', 'prose-part');
-        proseTail = el('div', 'prose-part');
-        prose.append(proseCommitted, proseTail);
-        proseRaw = '';
-        commitAt = 0;
-        content.appendChild(prose);
-      }
-      proseRaw += delta;
-      if (!flushQueued) {
-        flushQueued = true;
-        requestAnimationFrame(flushProse);
-      }
-    },
-
-    showError(message: string) {
-      this.setThinking(false);
-      flushProse();
-      closeAsks();
-      // Repeated identical errors collapse into one block with a counter.
-      const last = content.lastElementChild as HTMLElement | null;
-      if (last?.classList.contains('error-block') && last.dataset.message === message) {
-        const count = Number(last.dataset.count ?? 1) + 1;
-        last.dataset.count = String(count);
-        last.textContent = `${message} (×${count})`;
-      } else {
-        const block = el('div', 'error-block', message);
-        block.dataset.message = message;
-        content.appendChild(block);
-      }
-      scrollToBottom();
-    },
-
-    /** Renders the agent's mid-turn question(s); answers flow back over the bridge. */
-    showAsk(askId: string, questions: AskQuestion[]) {
-      this.setThinking(false);
-      flushProse();
-      prose = null; // text after the question starts a fresh block
-      const card = el('div', 'ask');
-      const chosen = new Map<string, Set<string>>();
-      const typed = new Map<string, string>();
-      // A lone single-select question answers on click; anything richer
-      // collects selections and submits via the footer button.
-      const instant = questions.length === 1 && !questions[0].multiSelect;
-      let submitted = false;
-
-      const answered = (q: AskQuestion) =>
-        Boolean(typed.get(q.question)?.trim() || chosen.get(q.question)?.size);
-      const collect = (): Record<string, string> => {
-        const out: Record<string, string> = {};
-        for (const q of questions) {
-          const text = typed.get(q.question)?.trim();
-          const picks = [...(chosen.get(q.question) ?? [])];
-          if (text) out[q.question] = text;
-          else if (picks.length) out[q.question] = picks.join(', ');
-        }
-        return out;
-      };
-      const setDisabled = (value: boolean) => {
-        card.classList.toggle('answered', value);
-        card.querySelectorAll('button, input').forEach((n) => {
-          (n as HTMLButtonElement | HTMLInputElement).disabled = value;
-        });
-      };
-      const submit = async (answers: Record<string, string> | null) => {
-        if (submitted || !harness) return;
-        submitted = true;
-        setDisabled(true);
-        try {
-          await harness.answerAsk(turnId, askId, answers);
-        } catch (err) {
-          // Delivery failed — the agent is still waiting. Re-arm the card.
-          submitted = false;
-          setDisabled(false);
-          showToast(`Couldn't send the answer: ${err instanceof Error ? err.message : err}`);
-          return;
-        }
-        const idx = openAsks.indexOf(card);
-        if (idx !== -1) openAsks.splice(idx, 1);
-        // Record the outcome so replayed history keeps the question + answer.
-        for (const entry of session.log) {
-          if (entry.kind !== 'turn') continue;
-          const ev = entry.events.find((e) => e.kind === 'ask' && e.askId === askId);
-          if (ev && ev.kind === 'ask') ev.answers = answers;
-        }
-        schedulePersist(session);
-        if (answers) this.setThinking(true);
-      };
-
-      const sendBtn = el('button', 'btn-primary', 'Send answer');
-      sendBtn.type = 'button';
-      sendBtn.disabled = true;
-      sendBtn.addEventListener("click", () => void submit(collect()));
-      const refresh = () => {
-        sendBtn.disabled = !questions.every(answered);
-      };
-
-      for (const q of questions) {
-        const sec = el('div', 'ask-q');
-        const head = el('div', 'ask-head');
-        if (q.header) head.appendChild(el('span', 'ask-chip', q.header));
-        head.appendChild(el('span', 'ask-question', q.question));
-        sec.appendChild(head);
-
-        const opts = el('div', 'ask-options');
-        for (const option of q.options) {
-          const btn = el('button', 'ask-option');
-          btn.type = 'button';
-          btn.appendChild(el('span', 'ask-option-label', option.label));
-          if (option.description) btn.appendChild(el('span', 'ask-option-desc', option.description));
-          btn.addEventListener('click', () => {
-            let set = chosen.get(q.question);
-            if (!set) chosen.set(q.question, (set = new Set()));
-            if (q.multiSelect) {
-              if (set.has(option.label)) set.delete(option.label);
-              else set.add(option.label);
-              btn.classList.toggle('selected');
-            } else {
-              set.clear();
-              set.add(option.label);
-              opts.querySelectorAll('.ask-option').forEach((b) => b.classList.remove('selected'));
-              btn.classList.add('selected');
-              if (instant) return void submit(collect());
-            }
-            refresh();
-          });
-          opts.appendChild(btn);
-        }
-        sec.appendChild(opts);
-
-        const other = document.createElement('input');
-        other.className = 'ask-other';
-        other.placeholder = 'Something else…';
-        other.addEventListener('input', () => {
-          typed.set(q.question, other.value);
-          refresh();
-        });
-        other.addEventListener('keydown', (e) => {
-          if (e.key === "Enter" && questions.every(answered)) void submit(collect());
-        });
-        sec.appendChild(other);
-        card.appendChild(sec);
-      }
-
-      const foot = el('div', 'ask-foot');
-      const dismiss = el('button', 'btn-ghost', 'Dismiss');
-      dismiss.type = 'button';
-      dismiss.title = 'Let the agent decide on its own';
-      dismiss.addEventListener("click", () => void submit(null));
-      foot.append(sendBtn, dismiss);
-      card.appendChild(foot);
-
-      content.appendChild(card);
-      openAsks.push(card);
-      scrollToBottom();
-    },
-
-    /** Read-only card for a question answered in a previous run. */
-    showAskReplay(questions: AskQuestion[], answers: Record<string, string> | null) {
-      flushProse();
-      prose = null;
-      const card = el('div', 'ask answered');
-      for (const q of questions) {
-        const sec = el('div', 'ask-q');
-        const head = el('div', 'ask-head');
-        if (q.header) head.appendChild(el('span', 'ask-chip', q.header));
-        head.appendChild(el('span', 'ask-question', q.question));
-        sec.appendChild(head);
-        const opts = el('div', 'ask-options');
-        const chosen = answers?.[q.question]?.split(', ') ?? [];
-        for (const option of q.options) {
-          const btn = el('button', 'ask-option');
-          btn.type = 'button';
-          btn.disabled = true;
-          if (chosen.includes(option.label)) btn.classList.add('selected');
-          btn.appendChild(el('span', 'ask-option-label', option.label));
-          if (option.description) btn.appendChild(el('span', 'ask-option-desc', option.description));
-          opts.appendChild(btn);
-        }
-        // Free-text answers that aren't one of the options.
-        const free = answers?.[q.question];
-        if (free && !q.options.some((o) => chosen.includes(o.label))) {
-          opts.appendChild(el('div', 'ask-option selected ask-free', free));
-        }
-        sec.appendChild(opts);
-        card.appendChild(sec);
-      }
-      if (!answers) card.appendChild(el('div', 'ask-dismissed', 'Dismissed — the agent decided on its own.'));
-      content.appendChild(card);
-    },
-
-    startTool(
-      toolId: string,
-      tool: string,
-      summary: string,
-      input: string,
-      parentId?: string,
-      isAgent?: boolean,
-      at = Date.now(),
-    ) {
-      this.setThinking(false);
-
-      // A sub-agent's own tool call: render it inside the agent's chat thread.
-      if (parentId) {
-        const agentThread = session.agents.get(parentId);
-        if (agentThread) {
-          agentThread.childTurn.startTool(toolId, tool, summary, input, undefined, undefined, at);
-          bumpAgent(agentThread.child);
-          return;
-        }
-        // Parent thread unknown — fall through and render a normal card.
-      }
-
-      flushProse();
-      prose = null; // next text delta starts a fresh paragraph block
-
-      if (isAgent) {
-        // The sub-agent gets its own chat, rooted under this session; the
-        // message here is just a live link to it.
-        const child = freshSession();
-        child.parentSessionId = session.id;
-        child.provider = session.provider;
-        child.turns = 1;
-        child.running = true;
-        child.tools = tools; // shared registry: tool-ends resolve across threads
-        child.toolStarts = toolStarts;
-        sessions.push(child);
-        addUserMessage(child, input || summary, session.title, ts); // the parent agent authored the task
-        child.title = summary;
-        const childTurn = addAssistantTurn(child, turnId);
-        session.agents.set(toolId, { child, childTurn, sawText: false });
-
-        const link = el('button', 'agent-link');
-        link.type = 'button';
-        link.append(
-          el('span', 'tool-status running'),
-          el('span', 'agent-chip', 'Sub-agent'),
-          el('span', 'agent-link-title', summary),
-          el('span', 'tool-stamp', fmtClock(at)),
-          el('span', 'agent-link-open', 'Open chat →'),
-        );
-        link.addEventListener('click', () => openSession(child.id));
-        workAppend(link, `Sub-agent · ${summary}`);
-        tools.set(toolId, link);
-        toolStarts.set(toolId, at);
-        renderRecents();
-        return;
-      }
-
-      const card = el('details', 'tool');
-      const head = el('summary', 'tool-head');
-      head.append(
-        el('span', 'tool-status running'),
-        el('span', 'tool-name', tool),
-        el('span', 'tool-summary', summary),
-        el('span', 'tool-stamp', fmtClock(at)),
-        el('span', 'tool-time', ''),
-      );
-      card.append(head);
-      if (input) card.append(el('pre', 'tool-input', input));
-      workAppend(card, summary ? `${tool} · ${summary}` : tool);
-      tools.set(toolId, card);
-      toolStarts.set(toolId, at);
-      turnToolIds.push(toolId);
-    },
-
-    endTool(toolId: string, ok: boolean, output: string, at = Date.now()) {
-      const card = tools.get(toolId);
-      if (!card) return;
-      const status = card.querySelector('.tool-status') as HTMLElement;
-      status.className = `tool-status ${ok ? 'ok' : 'err'}`;
-      status.textContent = ok ? '✓' : '✕';
-      if (card.classList.contains('agent-link')) {
-        // Sub-agent finished: land its report in its chat and settle state.
-        const agentThread = session.agents.get(toolId);
-        if (agentThread) {
-          if (!agentThread.sawText && output) agentThread.childTurn.appendText(output);
-          agentThread.child.running = false;
-          if (agentThread.child !== current && !agentThread.child.unread) {
-            agentThread.child.unread = ok ? 'done' : 'error';
-          }
-          renderRecents();
-        }
-        detailFollow(card);
-        return;
-      }
-      const started = toolStarts.get(toolId);
-      if (started) {
-        // Claude delivers tool_use + result almost together, so sub-0.1s
-        // receipt gaps are noise — show duration only when it means something.
-        const secs = Math.max(0, at - started) / 1000;
-        const parts: string[] = [];
-        if (secs >= 0.1) parts.push(`${secs.toFixed(1)}s`);
-        if (!ok) parts.push('failed');
-        (card.querySelector('.tool-time') as HTMLElement).textContent = parts.join(' · ');
-      }
-      card.appendChild(el('pre', 'tool-output', output));
-      detailFollow(card);
-    },
-
-    finish(stats: TurnStats) {
-      this.setThinking(false);
-      flushProse();
-      closeAsks();
-      // Plain tool cards can't receive events after turn-end — release the
-      // map entries (agent-link ids stay: resumed sub-agents span turns).
-      for (const toolId of turnToolIds) {
-        tools.delete(toolId);
-        toolStarts.delete(toolId);
-      }
-      // Text-only turns stay plain; tool turns settle their dynamic card.
-      if (steps > 0) {
-        const seconds = (stats.durationMs / 1000).toFixed(1);
-        const cost = stats.costUsd !== undefined ? ` · $${stats.costUsd.toFixed(4)}` : '';
-        workAppend(
-          el(
-            'div',
-            'turn-stats',
-            `${fmtTokens(stats.inputTokens)} in · ` +
-              `${fmtTokens(stats.outputTokens)} out · ${seconds}s${cost}`,
-          ),
-        );
-        turnCard.classList.remove('running');
-        turnCard.classList.add('done');
-        cardLabel.textContent = `${steps} step${steps === 1 ? '' : 's'} · ${seconds}s${cost}`;
-        cardLatest.textContent = '';
-      }
-      scrollToBottom();
-    },
-  };
+  nav({ view: 'chat' });
+  const target = store.findSession(id);
+  if (target) showSession(target);
 }
 
 /* ---------- Turn loop ---------- */
-
-const SEND_ICON = '<svg viewBox="0 0 24 24"><path d="M12 19V5" /><path d="m5 12 7-7 7 7" /></svg>';
-const STOP_ICON = '<svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>';
 
 /** Reflect the CURRENT session's turn state on the send/stop button. */
 function syncComposer(): void {
@@ -1753,7 +1007,7 @@ async function submit(text: string): Promise<void> {
   renderRecents();
 
   // Record structured history so a restart can replay this turn into live UI.
-  session.log.push({ kind: 'user', text: trimmed, author: USER_NAME, ts: Date.now() });
+  session.log.push({ kind: 'user', text: trimmed, author: 'user', ts: Date.now() });
   const record: ConversationEntry = { kind: 'turn', ts: Date.now(), events: [] };
   session.log.push(record);
   persistConversation(session); // the user's message is durable immediately
@@ -1778,43 +1032,16 @@ async function submit(text: string): Promise<void> {
         }
         schedulePersist(session);
       }
+      applyEvent(turn, event, false);
       switch (event.kind) {
-        case 'thinking':
-          turn.setThinking(event.active);
-          break;
         case 'error':
-          turn.showError(event.message);
-          if (session !== current) {
-            session.unread = 'error';
-            renderRecents();
-          }
-          break;
-        case 'text-delta':
-          turn.appendText(event.text, event.parentId);
-          break;
-        case 'tool-start':
-          turn.startTool(
-            event.toolId,
-            event.tool,
-            event.summary,
-            event.input,
-            event.parentId,
-            event.agent,
-            event.ts,
-          );
-          break;
-        case 'tool-end':
-          turn.endTool(event.toolId, event.ok, event.output, event.ts);
-          break;
         case 'ask':
-          turn.showAsk(event.askId, event.questions);
           if (session !== current) {
-            session.unread = 'ask';
+            session.unread = event.kind;
             renderRecents();
           }
           break;
         case 'turn-end':
-          turn.finish(event.stats);
           if (event.stats.inputTokens + event.stats.outputTokens > 0) {
             session.usage = event.stats.inputTokens + event.stats.outputTokens;
           }
@@ -1841,84 +1068,6 @@ async function submit(text: string): Promise<void> {
     renderRecents();
     // Conversations are forever — persist the completed turn.
     persistConversation(session);
-  }
-}
-
-/** Render a stored history lazily: only when its conversation first opens. */
-function hydrate(session: Session): void {
-  if (!session.pendingLog) return;
-  const log = session.pendingLog;
-  session.pendingLog = undefined;
-  replayLog(session, log);
-}
-
-/** Long histories replay only their tail; the rest loads on demand. */
-const REPLAY_WINDOW = 150;
-
-/** Rebuild a conversation's UI (and its sub-agent chats) from stored entries. */
-function replayLog(session: Session, log: ConversationEntry[], full = false): void {
-  session.log = log;
-  const entries = full || log.length <= REPLAY_WINDOW ? log : log.slice(-REPLAY_WINDOW);
-  if (entries.length < log.length) {
-    const item = el('li', 'load-earlier');
-    const btn = el('button', 'btn-ghost', `Show ${log.length - entries.length} earlier messages`);
-    btn.type = 'button';
-    btn.addEventListener('click', () => {
-      // Rebuild the whole thread from the full log through the same path.
-      session.thread.textContent = '';
-      delete session.thread.dataset.day;
-      session.tools.clear();
-      session.toolStarts.clear();
-      session.agents.clear();
-      for (const child of sessions.filter((c) => c.parentSessionId === session.id)) {
-        sessions.splice(sessions.indexOf(child), 1);
-      }
-      replayLog(session, log, true);
-      renderRecents();
-      scrollChat(true);
-    });
-    item.appendChild(btn);
-    session.thread.appendChild(item);
-  }
-  for (const entry of entries) {
-    if (entry.kind === 'user') {
-      addUserMessage(session, entry.text, entry.author, entry.ts);
-      continue;
-    }
-    const turn = addAssistantTurn(session, 'replay', entry.ts);
-    for (const event of entry.events) {
-      switch (event.kind) {
-        case 'text-delta':
-          turn.appendText(event.text, event.parentId);
-          break;
-        case 'tool-start':
-          turn.startTool(
-            event.toolId,
-            event.tool,
-            event.summary,
-            event.input,
-            event.parentId,
-            event.agent,
-            event.ts,
-          );
-          break;
-        case 'tool-end':
-          turn.endTool(event.toolId, event.ok, event.output, event.ts);
-          break;
-        case 'error':
-          turn.showError(event.message);
-          break;
-        case 'ask':
-          // Answered questions replay read-only; unanswered ones (the app
-          // closed mid-question) can't be revived and are skipped.
-          if (event.answers !== undefined) turn.showAskReplay(event.questions, event.answers);
-          break;
-        case 'turn-end':
-          turn.finish(event.stats);
-          break;
-      }
-    }
-    turn.setThinking(false);
   }
 }
 
@@ -1955,8 +1104,7 @@ function autosize(): void {
 prompt.addEventListener('input', autosize);
 
 addAgentBtn.addEventListener('click', () => {
-  settingsTab = 'agents';
-  showView('settings');
+  nav({ view: 'settings', section: 'agents' });
 });
 
 turnFullBack.addEventListener('click', closeFullTurn);
@@ -1993,6 +1141,21 @@ function openPalette(): void {
           .map((e) => (e.kind === 'text-delta' ? e.text : ''))
           .join(' ');
 
+  // Flattened, lowercased once per palette open (the first time a query needs
+  // it) — not on every keystroke.
+  let index: { info: AgentInfo; entries: { text: string; lower: string }[] }[] | null = null;
+  const getIndex = () =>
+    (index ??= agentInfos.map((info) => {
+      const conv = conversations.get(info.id);
+      return {
+        info,
+        entries: (conv?.pendingLog ?? conv?.log ?? []).map((entry) => {
+          const text = entryText(entry);
+          return { text, lower: text.toLowerCase() };
+        }),
+      };
+    }));
+
   const refresh = (): void => {
     const q = input.value.trim().toLowerCase();
     list.textContent = '';
@@ -2007,12 +1170,9 @@ function openPalette(): void {
       }
     }
     if (q.length >= 2) {
-      for (const info of agentInfos) {
-        const conv = conversations.get(info.id);
-        const log = conv?.pendingLog ?? conv?.log ?? [];
-        for (const entry of log) {
-          const text = entryText(entry);
-          const idx = text.toLowerCase().indexOf(q);
+      for (const { info, entries } of getIndex()) {
+        for (const { text, lower } of entries) {
+          const idx = lower.indexOf(q);
           if (idx === -1) continue;
           const snippet = text
             .slice(Math.max(0, idx - 24), idx + q.length + 40)
@@ -2028,8 +1188,7 @@ function openPalette(): void {
       }
     }
     for (const item of items.slice(0, 12)) {
-      const row = el('button', 'palette-item');
-      row.type = 'button';
+      const row = button('palette-item');
       row.append(el('span', 'palette-label', item.label), el('span', 'palette-sub', item.sub));
       row.addEventListener('click', () => {
         closePalette();
@@ -2070,8 +1229,7 @@ document.addEventListener('keydown', (e) => {
     else openPalette();
   } else if (mod && e.key === ',') {
     e.preventDefault();
-    settingsTab = 'agents';
-    showView('settings');
+    nav({ view: 'settings' }); // last-used section, same as the gear
   } else if (mod && /^[1-9]$/.test(e.key)) {
     const info = agentInfos[Number(e.key) - 1];
     if (info) {
@@ -2081,36 +1239,36 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// Composer mode chips (Search / Code) are visual toggles for now.
-document.querySelectorAll('.tool-chip.toggle').forEach((btn) => {
-  btn.addEventListener('click', () => btn.classList.toggle('active'));
-});
-
 /** Load the agent roster and restore each agent's permanent conversation. */
 async function boot(): Promise<void> {
   if (!bridge) {
     mountSession(current);
     return;
   }
-  await loadProviders(); // labels must be cached before conversations render
-  agentInfos = await bridge.agentList().catch(() => []);
-  const saved = await bridge.convoLoad().catch(() => ({}) as Record<string, never>);
+  // Labels must be cached before conversations render; the four fetches are
+  // otherwise independent.
+  const [, infos, saved, status] = await Promise.all([
+    loadProviders(),
+    bridge.agentList().catch(() => []),
+    bridge.convoLoad().catch(() => ({}) as Record<string, never>),
+    bridge.status().catch(() => null),
+  ]);
+  agentInfos = infos;
   for (const info of agentInfos) {
     const conv = conversationFor(info);
     const data = saved[info.id];
-    // Older HTML-snapshot saves have no `log`; they start fresh (memory is
-    // preserved separately via the provider resume ids). Histories are only
-    // REPLAYED when their conversation first opens — boot stays fast.
-    if (data && Array.isArray(data.log) && conv.turns === 0) {
+    // Histories are only REPLAYED when their conversation first opens — boot
+    // stays fast.
+    if (data && conv.turns === 0) {
       conv.pendingLog = data.log;
-      conv.usage = data.usage;
+      conv.usage = data.lastTurnTokens;
       conv.lastActiveAt = data.lastActiveAt;
       conv.turns = data.turns;
       conv.draft = data.draft;
     }
   }
   renderRecents();
-  const status = await bridge.status().catch(() => null);
+  if (status) applyStatus(status);
   const first = agentInfos.find((a) => a.id === status?.agent?.id) ?? agentInfos[0];
   if (first) openConversation(first.id);
   else mountSession(current);

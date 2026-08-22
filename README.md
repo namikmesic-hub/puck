@@ -6,8 +6,10 @@ sidebar — while every turn executes inside a Docker container you configure.
 
 ## How it works
 
-- **Agents** are named provider configurations (provider, model, system
-  instructions, thinking level, advanced API passthrough). Each agent has one
+- **Agents** are named provider configurations: provider, model, system
+  instructions, thinking level, a schema-driven options form (permission /
+  sandbox modes, per-tool toggles, limits — declared per provider, rendered
+  generically), and an advanced JSON passthrough. Each agent has one
   permanent conversation, persisted as a structured event log and replayed on
   launch — clickable turn cards, tool calls, and sub-agent chats survive
   restarts.
