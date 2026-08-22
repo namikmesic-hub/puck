@@ -1,0 +1,991 @@
+/* Chat surface: stage, turn detail, message rows, asks, tools, composer. */
+
+/* ---------- Chat stage ---------- */
+
+.stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.stage-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- Turn detail: inline expansion + full-screen view ---------- */
+
+.turn-detail {
+  display: none;
+}
+
+.turn-full {
+  display: none;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  width: 100%;
+  max-width: var(--content-col);
+  margin: 0 auto;
+  padding: 6px var(--content-pad) 18px;
+}
+
+.stage.turn-full-open .turn-full {
+  display: flex;
+}
+
+.stage.turn-full-open .chat,
+.stage.turn-full-open .composer-zone,
+.stage.turn-full-open .hero {
+  display: none;
+}
+
+.turn-full-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 12px;
+}
+
+.turn-full-head .back-link {
+  margin: 0;
+}
+
+.crumb-sep {
+  color: var(--gray-light);
+  font-size: 12.5px;
+}
+
+.turn-full-title {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--gray);
+}
+
+.turn-full-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* The detail node becomes visible when moved into the full-screen view. */
+.turn-full-body .turn-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* One dynamic card per tool-using turn — click to expand its detail. */
+
+.turn-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 100%;
+  margin-top: 8px;
+  cursor: pointer;
+  user-select: none;
+  border: 1px solid var(--line);
+  background: var(--white);
+  border-radius: 12px;
+  padding: 7px 9px 7px 13px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.turn-card.hidden {
+  display: none;
+}
+
+/* Elbow connector: from under the avatar, curving into the card. */
+.turn-card::before {
+  content: '';
+  position: absolute;
+  left: 27px; /* avatar center: 10px row padding + 34px avatar / 2 */
+  top: 42px; /* just below the 34px avatar */
+  bottom: 23px; /* roughly the card's vertical center */
+  width: 24px;
+  border-left: 2px solid var(--line);
+  border-bottom: 2px solid var(--line);
+  border-bottom-left-radius: 12px;
+  pointer-events: none;
+}
+
+.turn-card:hover {
+  border-color: rgba(46, 94, 78, 0.35);
+  box-shadow: 0 5px 16px rgba(46, 94, 78, 0.07);
+}
+
+.turn-card-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--gray-light);
+}
+
+.turn-card.running .turn-card-dot {
+  background: var(--gold);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.turn-card.done .turn-card-dot {
+  background: var(--emerald);
+}
+
+.turn-card-label {
+  flex: none;
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.turn-card-latest {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--gray);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.turn-card-latest:empty {
+  display: none;
+}
+
+/* Corner icon: the card opens this turn full-screen. */
+.turn-card-expand {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  color: var(--gray-light);
+  padding: 4px;
+}
+
+.turn-card:hover .turn-card-expand {
+  color: var(--emerald-dark);
+}
+
+.turn-card-expand svg {
+  width: 13px;
+  height: 13px;
+}
+
+.stage.empty .chat {
+  display: none;
+}
+
+/* Conversation intro — the Slack "beginning of your conversation" block. */
+.hero {
+  display: none;
+  flex: 1;
+  width: 100%;
+  max-width: var(--content-col);
+  margin: 0 auto;
+  padding: 28px var(--content-pad) 0;
+  animation: fade-in 0.15s ease;
+}
+
+.stage.empty .hero {
+  display: block;
+}
+
+.hero-avatar {
+  width: 54px;
+  height: 54px;
+  border-radius: 14px;
+  background: var(--emerald);
+  color: var(--white);
+  font-family: var(--font-display);
+  font-size: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 10px rgba(46, 94, 78, 0.22);
+}
+
+.hero-title {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 14px 0 6px;
+}
+
+.hero-subtitle {
+  font-size: 14px;
+  color: var(--gray);
+  margin: 0;
+}
+
+.hero-cta {
+  margin-top: 18px;
+}
+
+.stage.connected .hero-cta {
+  display: none;
+}
+
+.chat-head {
+  flex: none;
+  width: 100%;
+  max-width: var(--content-col);
+  margin: 0 auto;
+  padding: 0 var(--content-pad) 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.chat-head-name {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.chat-head.hidden,
+.stage.empty .chat-head {
+  display: none;
+}
+
+.chat {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.thread {
+  list-style: none;
+  width: 100%;
+  max-width: var(--content-col);
+  margin: 0 auto;
+  padding: 10px var(--content-pad) 12px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Slack-style message rows: avatar gutter, author + time, content below. */
+
+.msg-row {
+  position: relative; /* anchors the turn-card's avatar connector */
+  display: flex;
+  gap: 12px;
+  padding: 5px 10px;
+  margin: 0 -10px;
+  border-radius: 10px;
+  animation: fade-in 0.15s ease;
+  transition: background 0.1s ease;
+}
+
+.msg-row + .msg-row {
+  margin-top: 8px;
+}
+
+.msg-row:hover {
+  background: rgba(46, 94, 78, 0.035);
+}
+
+.row-avatar {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  color: var(--white);
+  font-size: 14px;
+  font-weight: 650;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+
+.row-avatar.agent {
+  background: var(--emerald);
+}
+
+.row-avatar.user {
+  background: linear-gradient(135deg, #dcb844, #b8952a);
+}
+
+.row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.row-author {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.row-time {
+  font-size: 11.5px;
+  color: var(--gray-light);
+}
+
+.row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.load-earlier {
+  display: flex;
+  justify-content: center;
+  padding: 6px 0 14px;
+}
+
+.day-divider {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 16px 0 10px;
+}
+
+.day-divider::before,
+.day-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line-soft);
+}
+
+.day-chip {
+  flex: none;
+  font-size: 11.5px;
+  font-weight: 650;
+  color: var(--gray);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  padding: 3px 12px;
+  background: var(--white);
+}
+
+.prose {
+  font-size: 14.5px;
+  line-height: 1.7;
+  min-width: 0;
+}
+
+/* Streaming splits prose into committed + tail wrappers; display:contents
+   keeps the markdown children flowing as if they were direct .prose kids. */
+.prose-part {
+  display: contents;
+}
+
+.prose > :first-child,
+.prose-part:first-child > :first-child {
+  margin-top: 0;
+}
+
+.prose > :last-child,
+.prose-part:last-child > :last-child {
+  margin-bottom: 0;
+}
+
+.prose p {
+  margin: 0 0 10px;
+}
+
+.prose ul,
+.prose ol {
+  margin: 0 0 10px;
+  padding-left: 22px;
+}
+
+.prose li {
+  margin: 2px 0;
+}
+
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4,
+.prose h5,
+.prose h6 {
+  font-size: 14.5px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 16px 0 8px;
+}
+
+.prose h1,
+.prose h2 {
+  font-size: 16px;
+}
+
+.prose code {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  background: var(--emerald-tint);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+
+.prose pre {
+  background: var(--white);
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin: 0 0 10px;
+  overflow-x: auto;
+}
+
+.prose pre code {
+  background: none;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.prose blockquote {
+  margin: 0 0 10px;
+  padding: 2px 14px;
+  border-left: 3px solid var(--gold);
+  color: var(--gray);
+}
+
+.prose a {
+  color: var(--emerald);
+}
+
+.prose table {
+  border-collapse: collapse;
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+
+.prose th,
+.prose td {
+  border: 1px solid var(--line);
+  padding: 5px 10px;
+  text-align: left;
+}
+
+.prose hr {
+  border: none;
+  border-top: 1px solid var(--line-soft);
+  margin: 14px 0;
+}
+
+.turn-stats {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--gray-light);
+  margin-top: 10px;
+  text-align: right;
+}
+
+.thinking {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.thinking-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--gold);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.thinking-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.thinking-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+.thinking-label {
+  font-size: 13px;
+  color: var(--gray);
+  margin-left: 5px;
+}
+
+/* Error block */
+
+.error-block {
+  border: 1px solid rgba(160, 60, 50, 0.25);
+  background: rgba(160, 60, 50, 0.06);
+  color: var(--red);
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+}
+
+/* Mid-turn question cards (agent is waiting on the user) */
+
+.ask {
+  border: 1px solid rgba(212, 175, 55, 0.5);
+  background: var(--white);
+  border-radius: 13px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: 0 6px 20px rgba(212, 175, 55, 0.08);
+}
+
+.ask.answered {
+  opacity: 0.6;
+  box-shadow: none;
+}
+
+.ask-q {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ask-head {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+
+.ask-chip {
+  flex: none;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--gold);
+  background: var(--gold-muted);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.ask-question {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.ask-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ask-option {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 12px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.ask-option:hover:not(:disabled) {
+  border-color: rgba(46, 94, 78, 0.35);
+  background: var(--emerald-tint);
+}
+
+.ask-option.selected {
+  border-color: var(--emerald);
+  background: var(--emerald-tint);
+  box-shadow: inset 0 0 0 1px var(--emerald);
+}
+
+.ask-option:disabled {
+  cursor: default;
+}
+
+.ask-option-label {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.ask-option-desc {
+  font-size: 12.5px;
+  color: var(--gray);
+}
+
+.ask-other {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--charcoal);
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 7px 12px;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.ask-other:focus {
+  border-color: rgba(46, 94, 78, 0.4);
+}
+
+.ask-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Replayed answers: free-text answer chip + dismissed note. */
+.ask-free {
+  font-size: 13px;
+}
+
+.ask-dismissed {
+  font-size: 12.5px;
+  color: var(--gray);
+  font-style: italic;
+}
+
+/* Keyboard operability: focused cards and options must be visible. */
+.card.clickable:focus-visible,
+.card.add:focus-visible,
+.turn-card:focus-visible,
+.ask-option:focus-visible,
+.agent-link:focus-visible {
+  outline: 2px solid var(--emerald);
+  outline-offset: 2px;
+}
+
+/* Tool call cards */
+
+.tool {
+  border: 1px solid var(--line-soft);
+  border-radius: 13px;
+  background: var(--white);
+  overflow: hidden;
+}
+
+.tool-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.tool-head::-webkit-details-marker {
+  display: none;
+}
+
+.tool-status {
+  flex: none;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+}
+
+.tool-status.running {
+  background: var(--gold-muted);
+}
+
+.tool-status.running::after {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--gold);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.tool-status.ok {
+  background: var(--emerald-tint);
+  color: var(--emerald);
+}
+
+.tool-status.err {
+  background: rgba(160, 60, 50, 0.12);
+  color: var(--red);
+}
+
+.tool-name {
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.tool-summary {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--gray);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-stamp {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--gray-light);
+}
+
+.tool-time {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--gray-light);
+}
+
+.tool-time:empty {
+  display: none;
+}
+
+.tool-input,
+.tool-output {
+  margin: 0;
+  padding: 11px 14px;
+  border-top: 1px solid var(--line-soft);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-x: auto;
+}
+
+.tool-input {
+  color: var(--emerald-dark);
+  background: var(--cream);
+}
+
+.tool-output {
+  color: var(--gray);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+/* Sub-agent link cards: the agent's work lives in its own linked chat. */
+
+.agent-chip {
+  flex: none;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--emerald);
+  background: var(--emerald-tint);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.agent-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  border: 1px solid rgba(46, 94, 78, 0.22);
+  background: var(--white);
+  border-radius: 13px;
+  padding: 10px 14px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.agent-link:hover {
+  border-color: rgba(46, 94, 78, 0.4);
+  box-shadow: 0 6px 20px rgba(46, 94, 78, 0.07);
+}
+
+.agent-link-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-link-open {
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--emerald);
+}
+
+/* ---------- Composer ---------- */
+
+.composer-zone {
+  flex: none;
+  width: 100%;
+  max-width: var(--content-col);
+  margin: 0 auto;
+  padding: 10px var(--content-pad) 18px;
+}
+
+.composer {
+  position: relative;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 14px 14px 10px 18px;
+  box-shadow: 0 10px 36px rgba(46, 94, 78, 0.06);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.composer:focus-within {
+  border-color: rgba(46, 94, 78, 0.32);
+  box-shadow: 0 10px 36px rgba(46, 94, 78, 0.1);
+}
+
+.composer textarea {
+  display: block;
+  width: 100%;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--charcoal);
+  padding: 0 0 10px;
+  max-height: 160px;
+}
+
+.composer textarea::placeholder {
+  color: var(--gray-light);
+}
+
+.composer textarea:disabled {
+  cursor: default;
+}
+
+.composer-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.picker.sel {
+  gap: 7px;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gray);
+  max-width: 260px;
+}
+
+.picker.sel span:not(.dot-mini) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dot-mini {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--gray-light);
+}
+
+.dot-mini.on {
+  background: var(--emerald);
+  box-shadow: 0 0 6px rgba(46, 94, 78, 0.45);
+}
+
+.dot-mini.off {
+  background: var(--red);
+}
+
+.model-menu.menu-up {
+  top: auto;
+  bottom: 56px;
+}
+
+.send {
+  width: 34px;
+  height: 34px;
+  margin-left: 8px;
+  border-radius: 50%;
+  background: var(--emerald);
+  color: var(--white);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.send svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 2.2;
+}
+
+.send:hover:not(:disabled) {
+  background: var(--emerald-light);
+}
+
+.send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.send.stop {
+  background: var(--red);
+}
+
+.send.stop:hover {
+  background: #b5493e;
+}
+
+.send.stopping {
+  animation: pulse 1s ease-in-out infinite;
+  cursor: default;
+}
+
+/* Settings sections while their bridge fetch is in flight. */
+.cards-loading {
+  font-size: 13px;
+  color: var(--gray-light);
+  padding: 18px 4px;
+}
+
+/* Roster stop button for a background turn (revealed on hover). */
+.recent-stop {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  padding: 4px;
+  border-radius: 6px;
+  color: var(--red);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.recent-stop svg {
+  width: 13px;
+  height: 13px;
+  fill: currentColor;
+}
+
+.recent-item:hover .recent-stop {
+  opacity: 1;
+}
+

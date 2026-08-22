@@ -86,7 +86,10 @@ Lint is at **zero problems** — keep it there. CI runs these plus
 ## Layout
 
 - `src/index.ts` — main process: window hardening, IPC handler registration
-  (validated in `src/main/ipcguard.ts`), conversation store
+  (ids/strings/configs validated in `src/main/ipcguard.ts`; the conversation
+  payload codec lives with its format in `src/main/conversations.ts` —
+  strict `fromIpc` on save, lenient `normalize` on load, one shared field
+  assembly)
 - `src/harness/` — the renderer↔main contract: `bridge.ts` (types +
   `PuckBridge`), `channels.ts` (IPC channel table), `types.ts`
   (`HarnessEvent` wire protocol), `options.ts` (provider option schema),
@@ -101,19 +104,29 @@ Lint is at **zero problems** — keep it there. CI runs these plus
   stderr diagnostics, `WIRE` contract)
 - `src/renderer.ts` — the wiring layer: DOM lookups, the nav applier +
   settings modal (`nav()` is the single entry point), composer/turn loop,
-  roster, palette, shortcuts, boot. Element ids follow prefixes: `a-*`
+  settings card grids, shortcuts, boot. Element ids follow prefixes: `a-*`
   agent editor, `d-*` environment editor, `sec-*` settings sections,
   `aed-*` agent-editor cards, `sm-*` settings modal.
+- `src/styles/` — one stylesheet per surface (`shell`, `settings`,
+  `editors`, `chat`, `overlays`); the import order in `renderer.ts`
+  preserves the cascade.
 - `src/renderer/` — extracted, unit-tested modules. The house style
   (proven by `options.ts`): context/elements in, controller out, no
   `getElementById` inside, jsdom tests.
   - `session-store.ts` — the Session model: conversations, sub-agent
     children, spawn/teardown, rename sync, debounced persistence.
   - `chat-view.ts` — message rows, Slack grouping, streaming turns
-    (markdown committer, tool/ask cards, sub-agents behind an
+    (markdown committer, tool cards, sub-agents behind an
     `onSpawnChild` seam), replay (`REPLAY_WINDOW`), full-turn overlay.
+  - `ask-card.ts` — the mid-turn question card (live + replay variants;
+    submit hook rejects to re-arm).
+  - `roster.ts` — the sidebar list: agent rows, unread/running dots,
+    nested sub-agent chats, rAF-coalesced `render()`.
+  - `palette.ts` — the Cmd+K palette: agent switcher + history search.
   - `settings/agent-editor.ts` — segmented pickers, dirty tracking,
     section rail + scroll-spy, epoch-guarded async population, save.
+  - `settings/env-editor.ts` — the environment detail page: config form,
+    env-var/secret kv lists, header with the shared op rail, save.
   - `settings/cards.ts` + `settings/env-rail.ts` — card-grid kit and the
     ONE environment op ladder (list cards + detail header share it).
   - `nav.ts` — pure nav state machine (`navTransition`, `escapeTarget`).

@@ -6,13 +6,21 @@
  * `HarnessEvent`s over the preload bridge (see src/harness/bridge.ts).
  */
 
-import './index.css';
+// One stylesheet per surface; import order preserves the original cascade.
+import './styles/shell.css';
+import './styles/settings.css';
+import './styles/editors.css';
+import './styles/chat.css';
+import './styles/overlays.css';
 import './harness/bridge';
-import { armDelete, el, flashSaved, showToast, statusEl } from './renderer/dom';
-import { button, errText, SEND_ICON, STOP_ICON } from './renderer/util';
+import { armDelete, el, showToast, statusEl } from './renderer/dom';
+import { button, errText, latestToken, SEND_ICON, STOP_ICON } from './renderer/util';
 import { createSessionStore, type Session } from './renderer/session-store';
 import { applyEvent, initChatView } from './renderer/chat-view';
 import { initAgentEditor } from './renderer/settings/agent-editor';
+import { initEnvEditor } from './renderer/settings/env-editor';
+import { initPalette } from './renderer/palette';
+import { initRoster } from './renderer/roster';
 import {
   escapeTarget,
   navTransition,
@@ -21,9 +29,8 @@ import {
   type SettingsSection,
   type View,
 } from './renderer/nav';
-import { addCard, cardShell, latestToken, loadingInto } from './renderer/settings/cards';
+import { addCard, cardShell, loadingInto } from './renderer/settings/cards';
 import { envOpRail } from './renderer/settings/env-rail';
-import { fmtTokens, relTime } from './renderer/format';
 import { IpcHarness } from './harness/ipc';
 import type {
   AgentInfo,
@@ -50,92 +57,55 @@ function providerLabel(id: string): string {
 const bridge: PuckBridge | undefined = window.puck;
 const harness = bridge ? new IpcHarness(bridge) : null;
 
-const stage = document.getElementById('stage') as HTMLElement;
-const chat = document.getElementById('chat') as HTMLElement;
-const composer = document.getElementById('composer') as HTMLFormElement;
-const prompt = document.getElementById('prompt') as HTMLTextAreaElement;
-const send = document.getElementById('send') as HTMLButtonElement;
-const recentsList = document.getElementById('recents') as HTMLUListElement;
-const addAgentBtn = document.getElementById('add-agent') as HTMLButtonElement;
-const chatHead = document.getElementById('chat-head') as HTMLElement;
-const chatHeadName = document.getElementById('chat-head-name') as HTMLElement;
-const chatHeadTag = document.getElementById('chat-head-tag') as HTMLElement;
-const turnFullBack = document.getElementById('turn-full-back') as HTMLButtonElement;
-const turnFullCrumb = document.getElementById('turn-full-crumb') as HTMLElement;
-const turnFullTitle = document.getElementById('turn-full-title') as HTMLElement;
-const turnFullBody = document.getElementById('turn-full-body') as HTMLElement;
-const openSettingsBtn = document.getElementById('open-settings') as HTMLButtonElement;
-const settingsNav = document.getElementById('settings-nav') as HTMLElement;
-const settingsOverlay = document.getElementById('settings-overlay') as HTMLElement;
-const settingsClose = document.getElementById('settings-close') as HTMLButtonElement;
+/** Typed lookup for the static ids in index.html. Editor-page elements are
+ *  looked up inline at the module init sites; only ids this file touches
+ *  more than once (or in listeners) get a named binding. */
+const byId = <T extends HTMLElement = HTMLElement>(id: string): T =>
+  document.getElementById(id) as T;
+
+const stage = byId('stage');
+const chat = byId('chat');
+const composer = byId<HTMLFormElement>('composer');
+const prompt = byId<HTMLTextAreaElement>('prompt');
+const send = byId<HTMLButtonElement>('send');
+const recentsList = byId<HTMLUListElement>('recents');
+const addAgentBtn = byId<HTMLButtonElement>('add-agent');
+const chatHead = byId('chat-head');
+const chatHeadName = byId('chat-head-name');
+const chatHeadTag = byId('chat-head-tag');
+const turnFullBack = byId<HTMLButtonElement>('turn-full-back');
+const openSettingsBtn = byId<HTMLButtonElement>('open-settings');
+const settingsNav = byId('settings-nav');
+const settingsOverlay = byId('settings-overlay');
+const settingsClose = byId<HTMLButtonElement>('settings-close');
 const sidebarEl = document.querySelector('.sidebar') as HTMLElement;
-const envselBtn = document.getElementById('envsel-btn') as HTMLButtonElement;
-const envselDot = document.getElementById('envsel-dot') as HTMLElement;
-const envselName = document.getElementById('envsel-name') as HTMLElement;
-const agentCards = document.getElementById('agent-cards') as HTMLElement;
-const agentMsg = document.getElementById('agent-msg') as HTMLElement;
-const agentDetailView = document.getElementById('agent-detail-view') as HTMLElement;
-const agentTitle = document.getElementById('agent-title') as HTMLElement;
-const agentBack = document.getElementById('agent-back') as HTMLButtonElement;
-const agentStatus = document.getElementById('agent-status') as HTMLElement;
-const agentControls = document.getElementById('agent-controls') as HTMLElement;
-const agentDetailMsg = document.getElementById('agent-detail-msg') as HTMLElement;
-const aName = document.getElementById('a-name') as HTMLInputElement;
-const aProvider = document.getElementById('a-provider') as HTMLSelectElement;
-const aModelSeg = document.getElementById('a-model-seg') as HTMLElement;
-const aModel = document.getElementById('a-model') as HTMLInputElement;
-const aThinkingSeg = document.getElementById('a-thinking-seg') as HTMLElement;
-const aSystem = document.getElementById('a-system') as HTMLTextAreaElement;
-const aSystemHint = document.getElementById('a-system-hint') as HTMLElement;
-const aOptions = document.getElementById('a-options') as HTMLElement;
-const aAdvanced = document.getElementById('a-advanced') as HTMLTextAreaElement;
-const aAdvancedWarn = document.getElementById('a-advanced-warn') as HTMLElement;
-const aSave = document.getElementById('a-save') as HTMLButtonElement;
-const agentNav = document.getElementById('agent-nav') as HTMLElement;
-const agentEditorMain = document.getElementById('agent-editor-main') as HTMLElement;
-const agentDirty = document.getElementById('agent-dirty') as HTMLElement;
-const aedIdentity = document.getElementById('aed-identity') as HTMLElement;
-const aIdentityMod = document.getElementById('a-identity-mod') as HTMLElement;
-const aedInstructions = document.getElementById('aed-instructions') as HTMLElement;
-const aedAdvanced = document.getElementById('aed-advanced') as HTMLElement;
-const heroSubtitle = document.getElementById('hero-subtitle') as HTMLElement;
-const heroTitle = document.getElementById('hero-title') as HTMLElement;
-const heroAvatar = document.getElementById('hero-avatar') as HTMLElement;
-const heroCta = document.getElementById('hero-cta') as HTMLButtonElement;
+const envselBtn = byId<HTMLButtonElement>('envsel-btn');
+const envselDot = byId('envsel-dot');
+const envselName = byId('envsel-name');
+const agentCards = byId('agent-cards');
+const agentMsg = byId('agent-msg');
+const agentDetailView = byId('agent-detail-view');
+const agentTitle = byId('agent-title');
+const heroSubtitle = byId('hero-subtitle');
+const heroTitle = byId('hero-title');
+const heroAvatar = byId('hero-avatar');
+const heroCta = byId<HTMLButtonElement>('hero-cta');
 
 /** Display label for the human author; persisted entries store 'user'. */
 const USER_NAME = 'You';
-const settingsView = document.getElementById('settings-view') as HTMLElement;
-const providerCards = document.getElementById('provider-cards') as HTMLElement;
-const envCards = document.getElementById('env-cards') as HTMLElement;
-const envMsg = document.getElementById('env-msg') as HTMLElement;
-const providerMsg = document.getElementById('provider-msg') as HTMLElement;
-const envDetailView = document.getElementById('env-detail-view') as HTMLElement;
-const detailTitle = document.getElementById('detail-title') as HTMLElement;
-const detailBack = document.getElementById('detail-back') as HTMLButtonElement;
-const secAgents = document.getElementById('sec-agents') as HTMLElement;
-const secProviders = document.getElementById('sec-providers') as HTMLElement;
-const secEnvs = document.getElementById('sec-envs') as HTMLElement;
-const secAgentsTitle = document.getElementById('sec-agents-title') as HTMLElement;
-const secProvidersTitle = document.getElementById('sec-providers-title') as HTMLElement;
-const secEnvsTitle = document.getElementById('sec-envs-title') as HTMLElement;
-const detailStatus = document.getElementById('detail-status') as HTMLElement;
-const detailControls = document.getElementById('detail-controls') as HTMLElement;
-const detailMsg = document.getElementById('detail-msg') as HTMLElement;
-const dName = document.getElementById('d-name') as HTMLInputElement;
-const dImage = document.getElementById('d-image') as HTMLInputElement;
-const dWorkspace = document.getElementById('d-workspace') as HTMLInputElement;
-const dAutoInstall = document.getElementById('d-autoinstall') as HTMLInputElement;
-const dDockerfile = document.getElementById('d-dockerfile') as HTMLTextAreaElement;
-const dEnvVars = document.getElementById('d-envvars') as HTMLElement;
-const dEnvKey = document.getElementById('d-env-key') as HTMLInputElement;
-const dEnvVal = document.getElementById('d-env-val') as HTMLInputElement;
-const dEnvAdd = document.getElementById('d-env-add') as HTMLButtonElement;
-const dSecrets = document.getElementById('d-secrets') as HTMLElement;
-const dSecretKey = document.getElementById('d-secret-key') as HTMLInputElement;
-const dSecretVal = document.getElementById('d-secret-val') as HTMLInputElement;
-const dSecretAdd = document.getElementById('d-secret-add') as HTMLButtonElement;
-const dSave = document.getElementById('d-save') as HTMLButtonElement;
+const settingsView = byId('settings-view');
+const providerCards = byId('provider-cards');
+const envCards = byId('env-cards');
+const envMsg = byId('env-msg');
+const providerMsg = byId('provider-msg');
+const envDetailView = byId('env-detail-view');
+const detailTitle = byId('detail-title');
+const secAgents = byId('sec-agents');
+const secProviders = byId('sec-providers');
+const secEnvs = byId('sec-envs');
+const secAgentsTitle = byId('sec-agents-title');
+const secProvidersTitle = byId('sec-providers-title');
+const secEnvsTitle = byId('sec-envs-title');
 
 // Sticky scrolling: follow the stream only while the user is at the bottom.
 let stickToBottom = true;
@@ -259,7 +229,7 @@ function nav(target: NavTarget): void {
       void agentEditor.open(target.agent); // reveals the view once populated
       break;
     case 'env-detail':
-      openDetail(target.env);
+      envEditor.open(target.env);
       break;
   }
 }
@@ -310,7 +280,7 @@ function showView(view: View): void {
   openSettingsBtn.classList.toggle('active', modalOpen);
   // Leaving a detail page abandons it (the env delete flow relies on this).
   if (view !== 'agent-detail') agentEditor.abandon();
-  if (view !== 'env-detail') detailEnvId = null;
+  if (view !== 'env-detail') envEditor.abandon();
   syncSettingsNavActive();
   if (view === 'settings') {
     showSettingsSection(navState.lastSection);
@@ -328,7 +298,7 @@ function showView(view: View): void {
 // Escape steps back: detail → its section list → close the modal.
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
-  if (palette) return closePalette();
+  if (palette.isOpen()) return palette.close();
   if (menu) return closeMenu();
   const target = escapeTarget(navState);
   if (!target) {
@@ -476,28 +446,28 @@ const agentEditor = initAgentEditor({
   els: {
     view: agentDetailView,
     title: agentTitle,
-    status: agentStatus,
-    controls: agentControls,
-    msg: agentDetailMsg,
-    back: agentBack,
-    name: aName,
-    provider: aProvider,
-    modelSeg: aModelSeg,
-    model: aModel,
-    thinkingSeg: aThinkingSeg,
-    system: aSystem,
-    systemHint: aSystemHint,
-    options: aOptions,
-    advanced: aAdvanced,
-    advancedWarn: aAdvancedWarn,
-    save: aSave,
-    nav: agentNav,
-    editorMain: agentEditorMain,
-    dirty: agentDirty,
-    identityCard: aedIdentity,
-    identityModBadge: aIdentityMod,
-    instructionsCard: aedInstructions,
-    advancedCard: aedAdvanced,
+    status: byId('agent-status'),
+    controls: byId('agent-controls'),
+    msg: byId('agent-detail-msg'),
+    back: byId<HTMLButtonElement>('agent-back'),
+    name: byId<HTMLInputElement>('a-name'),
+    provider: byId<HTMLSelectElement>('a-provider'),
+    modelSeg: byId('a-model-seg'),
+    model: byId<HTMLInputElement>('a-model'),
+    thinkingSeg: byId('a-thinking-seg'),
+    system: byId<HTMLTextAreaElement>('a-system'),
+    systemHint: byId('a-system-hint'),
+    options: byId('a-options'),
+    advanced: byId<HTMLTextAreaElement>('a-advanced'),
+    advancedWarn: byId('a-advanced-warn'),
+    save: byId<HTMLButtonElement>('a-save'),
+    nav: byId('agent-nav'),
+    editorMain: byId('agent-editor-main'),
+    dirty: byId('agent-dirty'),
+    identityCard: byId('aed-identity'),
+    identityModBadge: byId('a-identity-mod'),
+    instructionsCard: byId('aed-instructions'),
+    advancedCard: byId('aed-advanced'),
   },
 });
 
@@ -566,8 +536,36 @@ async function renderProviders(): Promise<void> {
 
 /* ---------- Environment list + detail editor ---------- */
 
-let detailEnvId: string | null = null;
-let detailEnvVars: Record<string, string> = {};
+// The env editor owns the detail form, kv lists, header, and save flow
+// (src/renderer/settings/env-editor.ts); this file hands it the DOM.
+const envEditor = initEnvEditor({
+  bridge,
+  applyStatus,
+  refreshStatus,
+  showView: () => showView('env-detail'),
+  navToEnvs: () => nav({ view: 'settings', section: 'envs' }),
+  els: {
+    title: detailTitle,
+    status: byId('detail-status'),
+    controls: byId('detail-controls'),
+    msg: byId('detail-msg'),
+    back: byId<HTMLButtonElement>('detail-back'),
+    name: byId<HTMLInputElement>('d-name'),
+    image: byId<HTMLInputElement>('d-image'),
+    workspace: byId<HTMLInputElement>('d-workspace'),
+    autoInstall: byId<HTMLInputElement>('d-autoinstall'),
+    dockerfile: byId<HTMLTextAreaElement>('d-dockerfile'),
+    envVars: byId('d-envvars'),
+    envKey: byId<HTMLInputElement>('d-env-key'),
+    envVal: byId<HTMLInputElement>('d-env-val'),
+    envAdd: byId<HTMLButtonElement>('d-env-add'),
+    secrets: byId('d-secrets'),
+    secretKey: byId<HTMLInputElement>('d-secret-key'),
+    secretVal: byId<HTMLInputElement>('d-secret-val'),
+    secretAdd: byId<HTMLButtonElement>('d-secret-add'),
+    save: byId<HTMLButtonElement>('d-save'),
+  },
+});
 
 async function renderEnvs(): Promise<void> {
   if (!bridge) return;
@@ -616,7 +614,7 @@ function renderEnvsFrom(envs: EnvironmentInfo[]): void {
         await refreshStatus();
       },
       onDelete: (target) => {
-        if (detailEnvId === target.id) detailEnvId = null;
+        envEditor.forget(target.id);
         return bridge.envDelete(target.id);
       },
     });
@@ -646,138 +644,6 @@ function renderEnvsFrom(envs: EnvironmentInfo[]): void {
   );
 }
 
-function kvRow(key: string, value: string, onRemove: () => void): HTMLElement {
-  const row = el('div', 'kv-row');
-  row.appendChild(el('span', 'kv-key', key));
-  row.appendChild(el('span', 'kv-val', value));
-  const remove = button('kv-remove', '✕');
-  remove.addEventListener('click', onRemove);
-  row.appendChild(remove);
-  return row;
-}
-
-function renderDetailEnvVars(): void {
-  dEnvVars.textContent = '';
-  for (const [key, value] of Object.entries(detailEnvVars)) {
-    dEnvVars.appendChild(
-      kvRow(key, value, () => {
-        delete detailEnvVars[key];
-        renderDetailEnvVars();
-      }),
-    );
-  }
-}
-
-function renderDetailSecrets(keys: string[]): void {
-  dSecrets.textContent = '';
-  for (const key of keys) {
-    dSecrets.appendChild(
-      kvRow(key, '••••••••', async () => {
-        if (!bridge || !detailEnvId) return;
-        const envs = await bridge.envSecretDelete(detailEnvId, key);
-        const current = envs.find((e) => e.id === detailEnvId);
-        renderDetailSecrets(current?.secretKeys ?? []);
-      }),
-    );
-  }
-}
-
-/** Header of the environment page: name, live status, management controls. */
-function renderDetailHeader(env: EnvironmentInfo): void {
-  detailTitle.textContent = env.name;
-  detailStatus.textContent = '';
-  detailStatus.appendChild(statusEl(env.status === 'running', env.status));
-  if (env.active) detailStatus.appendChild(el('span', 'badge-active', 'active'));
-
-  detailControls.textContent = '';
-  if (!bridge) return;
-  envOpRail(detailControls, env, {
-    bridge,
-    applyStatus,
-    message: (text) => {
-      detailMsg.textContent = text;
-    },
-    onSettled: async (latest) => {
-      await refreshStatus();
-      if (!detailEnvId) return; // deleted — already navigated back
-      const list = latest ?? ((await bridge.envList().catch(() => [])) as EnvironmentInfo[]);
-      const shown = list.find((e) => e.id === detailEnvId);
-      if (shown) renderDetailHeader(shown);
-    },
-    onDelete: async (target) => {
-      const out = await bridge.envDelete(target.id);
-      nav({ view: 'settings', section: 'envs' }); // showView clears detailEnvId
-      return out;
-    },
-  });
-}
-
-/** Navigates to the environment's dedicated page. */
-function openDetail(env: EnvironmentInfo): void {
-  detailEnvId = env.id;
-  detailMsg.textContent = '';
-  dName.value = env.name;
-  dImage.value = env.image;
-  dWorkspace.value = env.workspacePath;
-  dAutoInstall.checked = env.autoInstall;
-  dDockerfile.value = env.dockerfile;
-  detailEnvVars = { ...env.envVars };
-  renderDetailEnvVars();
-  renderDetailSecrets(env.secretKeys);
-  renderDetailHeader(env);
-  showView('env-detail');
-}
-
-detailBack.addEventListener('click', () => nav({ view: 'settings', section: 'envs' }));
-
-dEnvAdd.addEventListener('click', () => {
-  const key = dEnvKey.value.trim();
-  if (!key) return;
-  detailEnvVars[key] = dEnvVal.value;
-  dEnvKey.value = '';
-  dEnvVal.value = '';
-  renderDetailEnvVars();
-});
-
-dSecretAdd.addEventListener('click', async () => {
-  if (!bridge || !detailEnvId) return;
-  const key = dSecretKey.value.trim();
-  if (!key) return;
-  detailMsg.textContent = '';
-  try {
-    const envs = await bridge.envSecretSet(detailEnvId, key, dSecretVal.value);
-    dSecretKey.value = '';
-    dSecretVal.value = '';
-    const current = envs.find((e) => e.id === detailEnvId);
-    renderDetailSecrets(current?.secretKeys ?? []);
-  } catch (err) {
-    detailMsg.textContent = errText(err);
-  }
-});
-
-dSave.addEventListener('click', async () => {
-  if (!bridge || !detailEnvId) return;
-  detailMsg.textContent = '';
-  dSave.disabled = true;
-  try {
-    const envs = await bridge.envUpdate(detailEnvId, {
-      name: dName.value,
-      image: dImage.value,
-      workspacePath: dWorkspace.value,
-      autoInstall: dAutoInstall.checked,
-      dockerfile: dDockerfile.value,
-      envVars: detailEnvVars,
-    });
-    const current = envs.find((e) => e.id === detailEnvId);
-    if (current) renderDetailHeader(current);
-    await refreshStatus();
-    flashSaved(dSave);
-  } catch (err) {
-    detailMsg.textContent = errText(err);
-  }
-  dSave.disabled = false;
-});
-
 /* ---------- Sessions ---------- */
 
 let agentInfos: AgentInfo[] = [];
@@ -806,15 +672,15 @@ const chatView = initChatView({
     harness ? harness.answerAsk(turnId, askId, answers) : Promise.resolve(),
   toast: showToast,
   schedulePersist,
-  rosterChanged: renderRecents,
+  rosterChanged: () => renderRecents(), // lazily — the roster is wired below
   isCurrent: (session) => session === current,
   openSession,
   spawnChild: store.spawnChild,
   pruneChildren: store.dropChildren,
   overlay: {
-    body: turnFullBody,
-    crumb: turnFullCrumb,
-    title: turnFullTitle,
+    body: byId('turn-full-body'),
+    crumb: byId('turn-full-crumb'),
+    title: byId('turn-full-title'),
     stage,
     backButton: turnFullBack,
   },
@@ -887,79 +753,22 @@ function syncSessionChrome(session: Session): void {
   syncComposer();
 }
 
-function sessionSnippet(session: Session): string {
-  const parts = session.thread.querySelectorAll('.prose, .error-block');
-  const last = parts.length ? (parts[parts.length - 1].textContent ?? '') : '';
-  return last.split(/\s+/).join(' ').trim().slice(0, 120);
-}
-
-function statusDot(state: 'running' | 'done' | 'error' | 'ask'): HTMLElement {
-  const dot = el('span', `recent-status ${state}`);
-  dot.title =
-    state === 'running'
-      ? 'Agent working…'
-      : state === 'ask'
-        ? 'Waiting for your answer'
-        : state === 'error'
-          ? 'Finished with an error'
-          : 'Finished';
-  return dot;
-}
-
-/** Sidebar renders at most once per frame — callers fire on every event. */
-let recentsQueued = false;
-function renderRecents(): void {
-  if (recentsQueued) return;
-  recentsQueued = true;
-  requestAnimationFrame(() => {
-    recentsQueued = false;
-    renderRecentsNow();
-  });
-}
-
-/** Sidebar: the agent roster, each with its permanent chat + sub-agent chats. */
-function renderRecentsNow(): void {
-  recentsList.textContent = '';
-  for (const info of agentInfos) {
-    const conv = conversations.get(info.id);
-    const item = el('li', 'recent-item');
-    const btn = button('recent agent-row' + (conv && conv === current ? ' active' : ''), info.name);
-    btn.title =
-      providerLabel(info.provider) +
-      (conv && conv.turns > 0
-        ? ` · ctx ${fmtTokens(conv.usage)} · ${relTime(conv.lastActiveAt)}`
-        : ' · no messages yet');
-    btn.addEventListener('click', () => openConversation(info.id));
-    item.appendChild(btn);
-    const state = conv?.running ? 'running' : conv?.unread;
-    if (state) item.appendChild(statusDot(state));
-    if (conv?.running && conv.turnId) {
-      // Background turns are stoppable from the roster, not just when open.
-      const stopBtn = button('recent-stop');
-      stopBtn.title = `Stop ${info.name}'s turn`;
-      stopBtn.innerHTML = STOP_ICON;
-      stopBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (conv.turnId && harness) harness.interrupt(conv.turnId);
-      });
-      item.appendChild(stopBtn);
-    }
-    recentsList.appendChild(item);
-
-    // Sub-agent chats, nested under the conversation that spawned them.
-    if (!conv) continue;
-    for (const child of store.childrenOf(conv)) {
-      const childItem = el('li', 'recent-item child');
-      const childBtn = button('recent' + (child.id === current.id ? ' active' : ''), child.title);
-      childBtn.title = sessionSnippet(child) || child.title;
-      childBtn.addEventListener('click', () => openSession(child.id));
-      childItem.appendChild(childBtn);
-      const childState = child.running ? 'running' : child.unread;
-      if (childState) childItem.appendChild(statusDot(childState));
-      recentsList.appendChild(childItem);
-    }
-  }
-}
+// The roster owns the sidebar list's rendering (src/renderer/roster.ts);
+// render() is rAF-coalesced, so callers fire it on every event.
+const roster = initRoster({
+  listEl: recentsList,
+  agents: () => agentInfos,
+  conversationOf: (agentId) => conversations.get(agentId),
+  childrenOf: store.childrenOf,
+  isCurrent: (session) => session === current,
+  providerLabel,
+  openConversation,
+  openSession,
+  interrupt: (turnId) => {
+    if (harness) harness.interrupt(turnId);
+  },
+});
+const renderRecents = roster.render;
 
 /** Open a sub-agent chat by its session id. */
 function openSession(id: number): void {
@@ -1111,122 +920,23 @@ turnFullBack.addEventListener('click', closeFullTurn);
 
 /* ---------- Command palette: Cmd+K switches agents + searches history ---------- */
 
-let palette: HTMLElement | null = null;
-
-function closePalette(): void {
-  palette?.remove();
-  palette = null;
-}
-
-function openPalette(): void {
-  closePalette();
-  palette = el('div', 'palette-overlay');
-  const box = el('div', 'palette');
-  const input = document.createElement('input');
-  input.className = 'palette-input';
-  input.placeholder = 'Jump to an agent or search messages…';
-  const list = el('div', 'palette-list');
-  box.append(input, list);
-  palette.appendChild(box);
-  palette.addEventListener('click', (e) => {
-    if (e.target === palette) closePalette();
-  });
-  document.body.appendChild(palette);
-
-  const entryText = (entry: ConversationEntry): string =>
-    entry.kind === 'user'
-      ? entry.text
-      : entry.events
-          .filter((e) => e.kind === 'text-delta')
-          .map((e) => (e.kind === 'text-delta' ? e.text : ''))
-          .join(' ');
-
-  // Flattened, lowercased once per palette open (the first time a query needs
-  // it) — not on every keystroke.
-  let index: { info: AgentInfo; entries: { text: string; lower: string }[] }[] | null = null;
-  const getIndex = () =>
-    (index ??= agentInfos.map((info) => {
-      const conv = conversations.get(info.id);
-      return {
-        info,
-        entries: (conv?.pendingLog ?? conv?.log ?? []).map((entry) => {
-          const text = entryText(entry);
-          return { text, lower: text.toLowerCase() };
-        }),
-      };
-    }));
-
-  const refresh = (): void => {
-    const q = input.value.trim().toLowerCase();
-    list.textContent = '';
-    const items: { label: string; sub: string; go: () => void }[] = [];
-    for (const info of agentInfos) {
-      if (!q || info.name.toLowerCase().includes(q)) {
-        items.push({
-          label: info.name,
-          sub: providerLabel(info.provider),
-          go: () => openConversation(info.id),
-        });
-      }
-    }
-    if (q.length >= 2) {
-      for (const { info, entries } of getIndex()) {
-        for (const { text, lower } of entries) {
-          const idx = lower.indexOf(q);
-          if (idx === -1) continue;
-          const snippet = text
-            .slice(Math.max(0, idx - 24), idx + q.length + 40)
-            .split(/\s+/)
-            .join(' ');
-          items.push({
-            label: `“…${snippet}…”`,
-            sub: `in ${info.name}`,
-            go: () => openConversation(info.id),
-          });
-          break; // one hit per conversation keeps the list scannable
-        }
-      }
-    }
-    for (const item of items.slice(0, 12)) {
-      const row = button('palette-item');
-      row.append(el('span', 'palette-label', item.label), el('span', 'palette-sub', item.sub));
-      row.addEventListener('click', () => {
-        closePalette();
-        item.go();
-      });
-      list.appendChild(row);
-    }
-  };
-
-  input.addEventListener('input', refresh);
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closePalette();
-    else if (e.key === 'Enter') (list.firstElementChild as HTMLElement | null)?.click();
-    else if (e.key === 'ArrowDown') {
-      (list.firstElementChild as HTMLElement | null)?.focus();
-      e.preventDefault();
-    }
-  });
-  list.addEventListener('keydown', (e) => {
-    const target = e.target as HTMLElement;
-    if (e.key === 'ArrowDown') {
-      (target.nextElementSibling as HTMLElement | null)?.focus();
-      e.preventDefault();
-    } else if (e.key === 'ArrowUp') {
-      ((target.previousElementSibling as HTMLElement | null) ?? input).focus();
-      e.preventDefault();
-    } else if (e.key === 'Escape') closePalette();
-  });
-  refresh();
-  input.focus();
-}
+// The palette owns its overlay, search index, and keyboard flow
+// (src/renderer/palette.ts); this file supplies the data and navigation.
+const palette = initPalette({
+  agents: () => agentInfos,
+  logOf: (agentId) => {
+    const conv = conversations.get(agentId);
+    return conv?.pendingLog ?? conv?.log;
+  },
+  providerLabel,
+  openConversation,
+});
 
 document.addEventListener('keydown', (e) => {
   const mod = e.metaKey || e.ctrlKey;
   if (mod && e.key.toLowerCase() === 'k') {
     e.preventDefault();
-    if (palette) closePalette();
-    else openPalette();
+    palette.toggle();
   } else if (mod && e.key === ',') {
     e.preventDefault();
     nav({ view: 'settings' }); // last-used section, same as the gear

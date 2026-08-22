@@ -1,0 +1,479 @@
+/* Puck — sleek modern app shell in the house palette:
+   cream canvas, deep emerald accent, gold highlights. */
+
+:root {
+  --cream: #fffdf7;
+  --white: #ffffff;
+  --emerald: #2e5e4e;
+  --emerald-light: #3a7a66;
+  --emerald-dark: #1e3e34;
+  --emerald-tint: rgba(46, 94, 78, 0.07);
+  --gold: #d4af37;
+  --gold-muted: rgba(212, 175, 55, 0.15);
+  --charcoal: #1c1c1a;
+  --gray: #6b6b66;
+  --gray-light: #78786f; /* ≥4.5:1 on cream — timestamps must stay readable */
+  --red: #a03c32;
+  --line: rgba(46, 94, 78, 0.12);
+  --line-soft: rgba(46, 94, 78, 0.07);
+
+  --font-ui:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --font-display: 'Playfair Display', 'Didot', Georgia, serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  /* One shared column so the thread, composer, and pages always line up. */
+  --content-col: min(100%, 940px);
+  --content-pad: clamp(16px, 3vw, 24px);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: flex;
+  overflow: hidden;
+  background: var(--cream);
+  color: var(--charcoal);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: var(--font-ui);
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+
+input[type='checkbox'] {
+  accent-color: var(--emerald);
+}
+
+svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex: none;
+}
+
+/* ---------- Sidebar ---------- */
+
+.sidebar {
+  flex: none;
+  width: clamp(200px, 21vw, 272px);
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--line-soft);
+  padding: 0 12px 14px;
+}
+
+.sidebar-drag {
+  height: 40px;
+  flex: none;
+  -webkit-app-region: drag;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 2px 8px 14px;
+}
+
+.logo {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: var(--emerald);
+  color: var(--white);
+  font-family: var(--font-display);
+  font-size: 17px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(46, 94, 78, 0.25);
+}
+
+.brand-name {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.beta {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--gold);
+  background: var(--gold-muted);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+  color: var(--charcoal);
+  transition: background 0.15s ease;
+}
+
+.nav-item:hover {
+  background: var(--emerald-tint);
+}
+
+.nav-item.active {
+  background: var(--emerald-tint);
+  font-weight: 600;
+}
+
+.nav-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gray-light);
+  margin: 12px 0 4px;
+  padding: 0 10px;
+}
+
+.recents {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin-top: 22px;
+}
+
+.recents-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-right: 4px;
+}
+
+.recents-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gray-light);
+  margin: 0 0 6px;
+  padding: 0 10px;
+}
+
+.icon-btn.small {
+  padding: 3px;
+  margin-bottom: 6px;
+}
+
+.icon-btn.small svg {
+  width: 14px;
+  height: 14px;
+}
+
+.agent-row {
+  font-weight: 600;
+}
+
+.recents-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.recent-item {
+  position: relative;
+}
+
+.recent {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 26px 6px 10px;
+  border-radius: 8px;
+  font-size: 13.5px;
+  color: var(--charcoal);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 0.15s ease;
+}
+
+.recent:hover {
+  background: var(--emerald-tint);
+}
+
+.recent.active {
+  background: var(--emerald-tint);
+  font-weight: 600;
+  color: var(--emerald-dark);
+}
+
+/* Live session activity: gold pulse while running, colored dot when done. */
+.recent-status {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.recent-status.running {
+  background: var(--gold);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.recent-status.done {
+  background: var(--emerald);
+}
+
+.recent-status.error {
+  background: var(--red);
+}
+
+.recent-status.ask {
+  background: var(--gold);
+  box-shadow: 0 0 0 3px var(--gold-muted);
+}
+
+.recent-item:hover .recent-status {
+  opacity: 0;
+}
+
+/* Sub-agent chats sit indented under their parent session. */
+.recent-item.child::before {
+  content: '↳';
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--gray-light);
+  font-size: 11px;
+  pointer-events: none;
+}
+
+.recent-item.child .recent {
+  padding-left: 28px;
+  font-size: 13px;
+  color: var(--gray);
+}
+
+.recent-item.child .recent.active {
+  color: var(--emerald-dark);
+}
+
+.recent-item.child:hover .recent-status {
+  opacity: 1; /* children have no delete button to make room for */
+}
+
+.sidebar-footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 8px 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--emerald-light), var(--emerald-dark));
+  color: var(--white);
+  font-size: 13px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sidebar-footer .user {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+
+.user-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.user-org {
+  font-size: 12px;
+  color: var(--gray-light);
+}
+
+.icon-btn {
+  color: var(--gray);
+  padding: 6px;
+  border-radius: 8px;
+  transition: background 0.15s ease;
+}
+
+.icon-btn:hover {
+  background: var(--emerald-tint);
+}
+
+.icon-btn.active {
+  background: var(--emerald-tint);
+  color: var(--emerald-dark);
+}
+
+/* ---------- Main column ---------- */
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.main-drag {
+  flex: none;
+  height: 38px;
+  -webkit-app-region: drag;
+}
+
+.picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: 9px;
+  transition: background 0.15s ease;
+}
+
+.picker:hover {
+  background: var(--emerald-tint);
+}
+
+.model-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 14px 40px rgba(46, 94, 78, 0.14);
+  animation: fade-in 0.12s ease;
+}
+
+.model-item {
+  text-align: left;
+  padding: 8px 12px;
+  border-radius: 9px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--charcoal);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 0.15s ease;
+}
+
+.model-item:hover {
+  background: var(--emerald-tint);
+}
+
+.model-item.active {
+  color: var(--emerald-dark);
+  font-weight: 650;
+  background: var(--emerald-tint);
+}
+
+.chevron {
+  width: 15px;
+  height: 15px;
+  color: var(--gray-light);
+}
+
+/* ---------- Buttons ---------- */
+
+.btn-primary {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--white);
+  background: var(--emerald);
+  border-radius: 999px;
+  padding: 8px 18px;
+  transition: background 0.15s ease;
+}
+
+.btn-primary:hover {
+  background: var(--emerald-light);
+}
+
+.btn-primary:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn-ghost {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--gray);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 11px;
+  transition: all 0.15s ease;
+}
+
+.btn-ghost:hover {
+  color: var(--emerald-dark);
+  border-color: rgba(46, 94, 78, 0.3);
+  background: var(--emerald-tint);
+}
+
+.btn-ghost:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn-ghost.danger:hover {
+  color: var(--red);
+  border-color: rgba(160, 60, 50, 0.35);
+  background: rgba(160, 60, 50, 0.06);
+}
+
+/* Armed destructive buttons — one more click actually deletes. */
+.btn-ghost.armed,
+.btn-ghost.armed:hover {
+  color: var(--white);
+  background: var(--red);
+  border-color: var(--red);
+}
+

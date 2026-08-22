@@ -13,8 +13,7 @@
 import type { AgentConfig, AgentInfo, ProviderInfo, PuckBridge } from '../../harness/bridge';
 import { el, flashSaved } from '../dom';
 import { renderOptionsForm, type OptionsForm } from '../options';
-import { buildSeg, button, errText, stableJson } from '../util';
-import { latestToken } from './cards';
+import { buildSeg, button, errText, latestToken, stableJson } from '../util';
 
 export interface AgentEditorElements {
   view: HTMLElement;

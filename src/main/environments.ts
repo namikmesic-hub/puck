@@ -14,7 +14,6 @@ import type { EnvironmentConfig, EnvironmentInfo } from '../harness/bridge';
 import { RUNNER_SOURCE } from './runner-source';
 import { detach as detachRunner } from './runner';
 import { docker, dockerOrThrow } from './docker-client';
-import { requireSecretKey } from './ipcguard';
 import { bootstrapPlan } from './provisioning';
 import { providers, type Provider } from './providers';
 import { deleteSecret, loadSecret, saveSecret } from './secrets';
@@ -99,18 +98,19 @@ function envSecrets(id: string): Record<string, string> {
   }
 }
 
+/** Key shape is validated at the IPC boundary (ipcguard.requireSecretKey). */
 export function secretSet(id: string, key: string, value: string): Promise<EnvironmentInfo[]> {
-  return withEnvLock(id, async () => {
+  return withEnvOp(id, async () => {
     requireEnv(id);
     const secrets = envSecrets(id);
-    secrets[requireSecretKey(key)] = value;
+    secrets[key] = value;
     await writeSecrets(id, secrets);
     return list();
   });
 }
 
 export function secretDelete(id: string, key: string): Promise<EnvironmentInfo[]> {
-  return withEnvLock(id, async () => {
+  return withEnvOp(id, async () => {
     requireEnv(id);
     const secrets = envSecrets(id);
     delete secrets[key];
@@ -183,11 +183,12 @@ function notifyReset(envId: string): void {
 
 // One mutex per environment across ALL lifecycle ops: a queued start must
 // not resurrect a just-deleted container, and rm must not race a doStart.
-// Every op first detaches the env's runner exec — a live runner must not
-// outlive its container state, and the next turn's runner picks up new
-// secrets / a redeployed runner.js.
+// "Op", not "lock": beyond serializing, every op first detaches the env's
+// runner exec — a live runner must not outlive its container state, and the
+// next turn's runner picks up new secrets / a redeployed runner.js. An op
+// that must NOT quiesce the runner (none exist today) needs a new helper.
 const envLocks = new Map<string, Promise<unknown>>();
-function withEnvLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
+function withEnvOp<T>(id: string, fn: () => Promise<T>): Promise<T> {
   const prev = envLocks.get(id) ?? Promise.resolve();
   const task = prev
     .catch(() => undefined)
@@ -203,11 +204,11 @@ function withEnvLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
 }
 
 export function start(id: string): Promise<EnvironmentInfo[]> {
-  return withEnvLock(id, () => doStart(id));
+  return withEnvOp(id, () => doStart(id));
 }
 
 export function stop(id: string): Promise<EnvironmentInfo[]> {
-  return withEnvLock(id, async () => {
+  return withEnvOp(id, async () => {
     requireEnv(id);
     await doStop(id);
     return list();
@@ -215,7 +216,7 @@ export function stop(id: string): Promise<EnvironmentInfo[]> {
 }
 
 export function restart(id: string): Promise<EnvironmentInfo[]> {
-  return withEnvLock(id, async () => {
+  return withEnvOp(id, async () => {
     requireEnv(id);
     await doStop(id);
     return doStart(id);
@@ -224,7 +225,7 @@ export function restart(id: string): Promise<EnvironmentInfo[]> {
 
 /** Destroy the container and recreate from current config (incl. build). */
 export function rebuild(id: string): Promise<EnvironmentInfo[]> {
-  return withEnvLock(id, async () => {
+  return withEnvOp(id, async () => {
     requireEnv(id);
     await doStop(id); // adopts rotated credentials; ignores not-running
     await docker(['rm', '-f', containerName(id)]);
@@ -234,7 +235,7 @@ export function rebuild(id: string): Promise<EnvironmentInfo[]> {
 }
 
 export function remove(id: string): Promise<EnvironmentInfo[]> {
-  return withEnvLock(id, async () => {
+  return withEnvOp(id, async () => {
     requireEnv(id);
     await docker(['rm', '-f', containerName(id)]);
     await docker(['rmi', imageTag(id)]);

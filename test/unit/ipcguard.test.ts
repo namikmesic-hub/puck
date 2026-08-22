@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   agentConfigFrom,
-  convoDataFrom,
+  askAnswersFrom,
   envConfigFrom,
+  objArgs,
   requireId,
   requireSecretKey,
+  requireString,
 } from '../../src/main/ipcguard';
 
 describe('requireId', () => {
@@ -65,30 +67,33 @@ describe('requireSecretKey', () => {
   });
 });
 
-describe('convoDataFrom', () => {
-  const turn = { kind: 'turn', ts: 5, events: [{ kind: 'text-delta', text: 'hi' }] };
-  const user = { kind: 'user', text: 'hello', author: 'user', ts: 4 };
-
-  it('round-trips a valid payload and coerces the numeric fields', () => {
-    const out = convoDataFrom({ log: [user, turn], lastTurnTokens: 'x', lastActiveAt: 9, turns: 1 });
-    expect(out.log).toEqual([user, turn]);
-    expect(out.lastTurnTokens).toBe(0); // non-number coerced
-    expect(out.lastActiveAt).toBe(9);
-    expect(out.draft).toBeUndefined();
-  });
-
-  it('keeps a string draft and drops a non-string one', () => {
-    expect(convoDataFrom({ log: [], lastActiveAt: 0, turns: 0, draft: 'd' }).draft).toBe('d');
-    expect(
-      convoDataFrom({ log: [], lastActiveAt: 0, turns: 0, draft: 7 }).draft,
-    ).toBeUndefined();
-  });
-
-  it('throws on malformed payloads instead of writing them to disk', () => {
-    expect(() => convoDataFrom(null)).toThrow();
-    expect(() => convoDataFrom([])).toThrow();
-    expect(() => convoDataFrom({ log: 'nope' })).toThrow();
-    expect(() => convoDataFrom({ log: [{ kind: 'mystery' }] })).toThrow();
-    expect(() => convoDataFrom({ log: [{ kind: 'turn', ts: 1 }] })).toThrow(); // no events array
+describe('objArgs', () => {
+  it('passes plain objects through and rejects everything else', () => {
+    expect(objArgs({ id: 'a' })).toEqual({ id: 'a' });
+    expect(() => objArgs(null)).toThrow();
+    expect(() => objArgs([])).toThrow();
+    expect(() => objArgs('x')).toThrow();
+    expect(() => objArgs(undefined)).toThrow();
   });
 });
+
+describe('requireString', () => {
+  it('accepts any string (including empty) and rejects non-strings', () => {
+    expect(requireString('ipc-1', 'turn id')).toBe('ipc-1');
+    expect(requireString('', 'prompt')).toBe('');
+    expect(() => requireString(7, 'turn id')).toThrow(/turn id/);
+    expect(() => requireString(undefined, 'prompt')).toThrow(/prompt/);
+  });
+});
+
+describe('askAnswersFrom', () => {
+  it('passes null (dismissed) and string records; rejects the rest', () => {
+    expect(askAnswersFrom(null)).toBeNull();
+    expect(askAnswersFrom(undefined)).toBeNull();
+    expect(askAnswersFrom({ 'Which one?': 'A' })).toEqual({ 'Which one?': 'A' });
+    expect(() => askAnswersFrom({ q: 42 })).toThrow();
+    expect(() => askAnswersFrom([])).toThrow();
+    expect(() => askAnswersFrom('yes')).toThrow();
+  });
+});
+

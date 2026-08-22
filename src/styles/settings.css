@@ -1,0 +1,278 @@
+/* Settings modal: overlay, section pages, status badges, card grids. */
+
+/* ---------- Settings modal ---------- */
+
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80; /* below the palette (90) and toast (100) */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4vh 4vw;
+  background: rgba(28, 28, 26, 0.45);
+  animation: fade-in 0.15s ease;
+}
+
+.settings-overlay.hidden {
+  display: none;
+}
+
+.settings-modal {
+  display: flex;
+  width: min(1160px, 100%);
+  height: min(800px, 100%);
+  background: var(--cream);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 24px 80px rgba(28, 28, 26, 0.35);
+  overflow: hidden;
+}
+
+.sm-menu {
+  flex: none;
+  width: 190px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 18px 10px;
+  background: var(--white);
+  border-right: 1px solid var(--line-soft);
+}
+
+.sm-menu .nav-label {
+  margin-top: 0;
+}
+
+.sm-body {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+
+.sm-close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  z-index: 5;
+}
+
+/* Each page is its own scroll container (the agent editor's scroll-spy and
+   sticky save bar depend on the page element being the scroller). */
+.sm-page {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  animation: fade-in 0.15s ease;
+}
+
+.sm-page.hidden {
+  display: none;
+}
+
+.sm-page .env-page {
+  padding-top: 20px;
+}
+
+.env-page {
+  width: 100%;
+  max-width: var(--content-col);
+  margin: 0 auto;
+  padding: 12px var(--content-pad) 60px;
+}
+
+.page-title {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.page-sub {
+  font-size: 13px;
+  color: var(--gray);
+  margin: 4px 0 18px;
+}
+
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.form-msg {
+  min-height: 20px;
+  font-size: 12.5px;
+  color: var(--red);
+  margin: 4px 0;
+  white-space: pre-wrap;
+}
+
+/* ---------- Status + badges (shared) ---------- */
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--gray-light);
+}
+
+.status .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--gray-light);
+}
+
+.status.on {
+  color: var(--emerald);
+}
+
+.status.on .dot {
+  background: var(--emerald);
+  box-shadow: 0 0 6px rgba(46, 94, 78, 0.45);
+}
+
+.badge-active {
+  flex: none;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--emerald);
+  background: var(--emerald-tint);
+  border: 1px solid rgba(46, 94, 78, 0.18);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
+.row-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+/* ---------- Settings cards ---------- */
+
+.settings-section {
+  margin-top: 14px;
+}
+
+.settings-section.hidden {
+  display: none;
+}
+
+/* Keyboard-driven navigation focuses the destination page title. */
+.page-title[tabindex='-1'] {
+  width: fit-content; /* the focus ring hugs the text, not the column */
+}
+
+.page-title[tabindex='-1']:focus-visible {
+  outline: 2px solid rgba(46, 94, 78, 0.4);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.page-sub code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--emerald-tint);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+}
+
+.card {
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.card.clickable {
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.card.clickable:hover {
+  border-color: rgba(46, 94, 78, 0.32);
+  box-shadow: 0 6px 20px rgba(46, 94, 78, 0.07);
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card-tag {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--gray-light);
+}
+
+.card-sub {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--gray-light);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card-foot {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.card.add {
+  border-style: dashed;
+  align-items: center;
+  justify-content: center;
+  min-height: 104px;
+  color: var(--gray);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.card.add:hover {
+  color: var(--emerald-dark);
+  border-color: rgba(46, 94, 78, 0.35);
+  background: var(--emerald-tint);
+}
+

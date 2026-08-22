@@ -13,7 +13,15 @@ import * as providerRegistry from './main/providers';
 import * as environments from './main/environments';
 import * as runner from './main/runner';
 import * as sessionRegistry from './main/session-registry';
-import { agentConfigFrom, convoDataFrom, envConfigFrom, requireId, requireSecretKey } from './main/ipcguard';
+import {
+  agentConfigFrom,
+  askAnswersFrom,
+  envConfigFrom,
+  objArgs,
+  requireId,
+  requireSecretKey,
+  requireString,
+} from './main/ipcguard';
 import { CHANNELS, EVENT_CHANNEL } from './harness/channels';
 
 // A rejected fire-and-forget promise must never take the process down.
@@ -77,7 +85,9 @@ const createWindow = (): void => {
 // One handler per CHANNELS entry (the Record type keeps the table total —
 // an unhandled channel is a compile error, and channels.test.ts asserts the
 // registration from the outside). Payloads arrive untrusted; every argument
-// goes through an ipcguard coercion before touching a store or docker.
+// goes through a validating coercion — ipcguard for ids/strings/configs,
+// conversations.fromIpc for the persisted transcript — before touching a
+// store or docker. No handler casts its args.
 type IpcHandler = (event: IpcMainInvokeEvent, args: unknown) => unknown;
 
 const ipcHandlers: Record<(typeof CHANNELS)[keyof typeof CHANNELS], IpcHandler> = {
@@ -97,7 +107,7 @@ const ipcHandlers: Record<(typeof CHANNELS)[keyof typeof CHANNELS], IpcHandler> 
   [CHANNELS.agentList]: () => agents.list(),
   [CHANNELS.agentCreate]: (_event, cfg) => agents.create(agentConfigFrom(cfg)),
   [CHANNELS.agentUpdate]: (_event, args) => {
-    const a = args as { id: unknown; cfg: unknown };
+    const a = objArgs(args);
     return agents.update(requireId(a.id, 'agent'), agentConfigFrom(a.cfg));
   },
   [CHANNELS.agentDelete]: (_event, id) => agents.remove(requireId(id, 'agent')),
@@ -109,7 +119,7 @@ const ipcHandlers: Record<(typeof CHANNELS)[keyof typeof CHANNELS], IpcHandler> 
   [CHANNELS.envList]: () => environments.list(),
   [CHANNELS.envCreate]: (_event, cfg) => environments.create(envConfigFrom(cfg)),
   [CHANNELS.envUpdate]: (_event, args) => {
-    const a = args as { id: unknown; cfg: unknown };
+    const a = objArgs(args);
     return environments.update(requireId(a.id, 'environment'), envConfigFrom(a.cfg));
   },
   [CHANNELS.envDelete]: (_event, id) => environments.remove(requireId(id, 'environment')),
@@ -118,12 +128,15 @@ const ipcHandlers: Record<(typeof CHANNELS)[keyof typeof CHANNELS], IpcHandler> 
   [CHANNELS.envRestart]: (_event, id) => environments.restart(requireId(id, 'environment')),
   [CHANNELS.envRebuild]: (_event, id) => environments.rebuild(requireId(id, 'environment')),
   [CHANNELS.envSecretSet]: (_event, args) => {
-    const a = args as { id: unknown; key: unknown; value: unknown };
-    if (typeof a.value !== 'string') throw new Error('Invalid secret value.');
-    return environments.secretSet(requireId(a.id, 'environment'), requireSecretKey(a.key), a.value);
+    const a = objArgs(args);
+    return environments.secretSet(
+      requireId(a.id, 'environment'),
+      requireSecretKey(a.key),
+      requireString(a.value, 'secret value'),
+    );
   },
   [CHANNELS.envSecretDelete]: (_event, args) => {
-    const a = args as { id: unknown; key: unknown };
+    const a = objArgs(args);
     return environments.secretDelete(requireId(a.id, 'environment'), requireSecretKey(a.key));
   },
   [CHANNELS.envSelect]: (_event, id) => {
@@ -133,21 +146,28 @@ const ipcHandlers: Record<(typeof CHANNELS)[keyof typeof CHANNELS], IpcHandler> 
 
   [CHANNELS.convoLoad]: () => conversations.loadAll(),
   [CHANNELS.convoSave]: (_event, args) => {
-    const a = args as { agentId: unknown; data: unknown };
-    return conversations.save(requireId(a.agentId, 'agent'), convoDataFrom(a.data));
+    const a = objArgs(args);
+    return conversations.save(requireId(a.agentId, 'agent'), conversations.fromIpc(a.data));
   },
 
   [CHANNELS.startTurn]: async (event, args) => {
-    const a = args as { turnId: string; agentId: string; prompt: string };
-    for await (const harnessEvent of backend.runTurn(a.turnId, a.agentId, a.prompt)) {
+    const a = objArgs(args);
+    const turnId = requireString(a.turnId, 'turn id');
+    const agentId = requireId(a.agentId, 'agent');
+    const promptText = requireString(a.prompt, 'prompt');
+    for await (const harnessEvent of backend.runTurn(turnId, agentId, promptText)) {
       if (event.sender.isDestroyed()) return;
-      event.sender.send(EVENT_CHANNEL, { turnId: a.turnId, event: harnessEvent });
+      event.sender.send(EVENT_CHANNEL, { turnId, event: harnessEvent });
     }
   },
-  [CHANNELS.interrupt]: (_event, turnId) => backend.interrupt(String(turnId)),
+  [CHANNELS.interrupt]: (_event, turnId) => backend.interrupt(requireString(turnId, 'turn id')),
   [CHANNELS.answerAsk]: (_event, args) => {
-    const a = args as { turnId: string; askId: string; answers: Record<string, string> | null };
-    return backend.answerAsk(a.turnId, a.askId, a.answers);
+    const a = objArgs(args);
+    return backend.answerAsk(
+      requireString(a.turnId, 'turn id'),
+      requireString(a.askId, 'ask id'),
+      askAnswersFrom(a.answers),
+    );
   },
 };
 

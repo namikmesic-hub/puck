@@ -10,7 +10,8 @@
  */
 
 import type { ConversationEntry } from '../harness/bridge';
-import type { AskOption, AskQuestion, HarnessEvent, TurnStats } from '../harness/types';
+import type { AskQuestion, HarnessEvent, TurnStats } from '../harness/types';
+import { askCard, askReplayCard, setAskAnswered } from './ask-card';
 import { el } from './dom';
 import { dayLabel, fmtClock, fmtTime, fmtTokens } from './format';
 import { renderMd } from './markdown';
@@ -220,29 +221,6 @@ export function initChatView(ctx: ChatViewContext) {
     if (session.thread.isConnected) ctx.scrollChat(true);
   }
 
-  /** Shared ask-card scaffolding: header chip + question line. */
-  function askHead(q: AskQuestion): HTMLElement {
-    const head = el('div', 'ask-head');
-    if (q.header) head.appendChild(el('span', 'ask-chip', q.header));
-    head.appendChild(el('span', 'ask-question', q.question));
-    return head;
-  }
-
-  /** Freeze (or re-arm) an ask card: answered styling plus every control disabled. */
-  function setAskAnswered(card: HTMLElement, answered: boolean): void {
-    card.classList.toggle('answered', answered);
-    card.querySelectorAll('button, input').forEach((n) => {
-      (n as HTMLButtonElement | HTMLInputElement).disabled = answered;
-    });
-  }
-
-  function askOptionButton(option: AskOption): HTMLButtonElement {
-    const btn = button('ask-option');
-    btn.appendChild(el('span', 'ask-option-label', option.label));
-    if (option.description) btn.appendChild(el('span', 'ask-option-desc', option.description));
-    return btn;
-  }
-
   /** Builds one assistant turn inside a session's thread (which may be off-screen). */
   function addAssistantTurn(session: Session, turnId: string, ts = Date.now()): AssistantTurn {
     // Only move the visible scroller when this session is the one on screen.
@@ -389,106 +367,28 @@ export function initChatView(ctx: ChatViewContext) {
         this.setThinking(false);
         flushProse();
         prose = null; // text after the question starts a fresh block
-        const card = el('div', 'ask');
-        const chosen = new Map<string, Set<string>>();
-        const typed = new Map<string, string>();
-        // A lone single-select question answers on click; anything richer
-        // collects selections and submits via the footer button.
-        const instant = questions.length === 1 && !questions[0].multiSelect;
-        let submitted = false;
-
-        const answered = (q: AskQuestion) =>
-          Boolean(typed.get(q.question)?.trim() || chosen.get(q.question)?.size);
-        const collect = (): Record<string, string> => {
-          const out: Record<string, string> = {};
-          for (const q of questions) {
-            const text = typed.get(q.question)?.trim();
-            const picks = [...(chosen.get(q.question) ?? [])];
-            if (text) out[q.question] = text;
-            else if (picks.length) out[q.question] = picks.join(', ');
-          }
-          return out;
-        };
-        const submit = async (answers: Record<string, string> | null) => {
-          if (submitted) return;
-          submitted = true;
-          setAskAnswered(card, true);
-          try {
-            await ctx.answerAsk(turnId, askId, answers);
-          } catch (err) {
-            // Delivery failed — the agent is still waiting. Re-arm the card.
-            submitted = false;
-            setAskAnswered(card, false);
-            ctx.toast(`Couldn't send the answer: ${errText(err)}`);
-            return;
-          }
-          const idx = openAsks.indexOf(card);
-          if (idx !== -1) openAsks.splice(idx, 1);
-          // Record the outcome so replayed history keeps the question + answer.
-          for (const entry of session.log) {
-            if (entry.kind !== 'turn') continue;
-            const ev = entry.events.find((e) => e.kind === 'ask' && e.askId === askId);
-            if (ev && ev.kind === 'ask') ev.answers = answers;
-          }
-          ctx.schedulePersist(session);
-          if (answers) this.setThinking(true);
-        };
-
-        const sendBtn = button('btn-primary', 'Send answer');
-        sendBtn.disabled = true;
-        sendBtn.addEventListener('click', () => void submit(collect()));
-        const refresh = () => {
-          sendBtn.disabled = !questions.every(answered);
-        };
-
-        for (const q of questions) {
-          const sec = el('div', 'ask-q');
-          sec.appendChild(askHead(q));
-
-          const opts = el('div', 'ask-options');
-          for (const option of q.options) {
-            const btn = askOptionButton(option);
-            btn.addEventListener('click', () => {
-              let set = chosen.get(q.question);
-              if (!set) chosen.set(q.question, (set = new Set()));
-              if (q.multiSelect) {
-                if (set.has(option.label)) set.delete(option.label);
-                else set.add(option.label);
-                btn.classList.toggle('selected');
-              } else {
-                set.clear();
-                set.add(option.label);
-                opts.querySelectorAll('.ask-option').forEach((b) => b.classList.remove('selected'));
-                btn.classList.add('selected');
-                if (instant) return void submit(collect());
-              }
-              refresh();
-            });
-            opts.appendChild(btn);
-          }
-          sec.appendChild(opts);
-
-          const other = document.createElement('input');
-          other.className = 'ask-other';
-          other.placeholder = 'Something else…';
-          other.addEventListener('input', () => {
-            typed.set(q.question, other.value);
-            refresh();
-          });
-          other.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && questions.every(answered)) void submit(collect());
-          });
-          sec.appendChild(other);
-          card.appendChild(sec);
-        }
-
-        const foot = el('div', 'ask-foot');
-        const dismiss = button('btn-ghost', 'Dismiss');
-        dismiss.title = 'Let the agent decide on its own';
-        dismiss.addEventListener('click', () => void submit(null));
-        foot.append(sendBtn, dismiss);
-        card.appendChild(foot);
-
+        // The card owns selection/collection/re-arm (ask-card.ts); delivery
+        // and the session-side bookkeeping live here.
+        const card = askCard(questions, {
+          submit: async (answers) => {
+            try {
+              await ctx.answerAsk(turnId, askId, answers);
+            } catch (err) {
+              ctx.toast(`Couldn't send the answer: ${errText(err)}`);
+              throw err; // the card re-arms itself
+            }
+            const idx = openAsks.indexOf(card);
+            if (idx !== -1) openAsks.splice(idx, 1);
+            // Record the outcome so replayed history keeps the question + answer.
+            for (const entry of session.log) {
+              if (entry.kind !== 'turn') continue;
+              const ev = entry.events.find((e) => e.kind === 'ask' && e.askId === askId);
+              if (ev && ev.kind === 'ask') ev.answers = answers;
+            }
+            ctx.schedulePersist(session);
+            if (answers) this.setThinking(true);
+          },
+        });
         content.appendChild(card);
         openAsks.push(card);
         scrollToBottom();
@@ -498,30 +398,7 @@ export function initChatView(ctx: ChatViewContext) {
       showAskReplay(questions: AskQuestion[], answers: Record<string, string> | null) {
         flushProse();
         prose = null;
-        const card = el('div', 'ask answered');
-        for (const q of questions) {
-          const sec = el('div', 'ask-q');
-          sec.appendChild(askHead(q));
-          const opts = el('div', 'ask-options');
-          const chosen = answers?.[q.question]?.split(', ') ?? [];
-          for (const option of q.options) {
-            const btn = askOptionButton(option);
-            btn.disabled = true;
-            if (chosen.includes(option.label)) btn.classList.add('selected');
-            opts.appendChild(btn);
-          }
-          // Free-text answers that aren't one of the options.
-          const free = answers?.[q.question];
-          if (free && !q.options.some((o) => chosen.includes(o.label))) {
-            opts.appendChild(el('div', 'ask-option selected ask-free', free));
-          }
-          sec.appendChild(opts);
-          card.appendChild(sec);
-        }
-        if (!answers) {
-          card.appendChild(el('div', 'ask-dismissed', 'Dismissed — the agent decided on its own.'));
-        }
-        content.appendChild(card);
+        content.appendChild(askReplayCard(questions, answers));
       },
 
       startTool(

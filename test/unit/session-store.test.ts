@@ -19,7 +19,9 @@ function info(id: string, name: string): AgentInfo {
 
 function makeStore() {
   const interrupt = vi.fn();
-  const save = vi.fn(async (_agentId: string, _data: ConversationData) => undefined);
+  const save = vi.fn<(agentId: string, data: ConversationData) => Promise<undefined>>(
+    async () => undefined,
+  );
   const store = createSessionStore({
     interrupt,
     save,

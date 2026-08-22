@@ -19,6 +19,15 @@ export function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** Monotonic request token: rapid async re-entries must not land stale content. */
+export function latestToken(): { next(): number; isCurrent(token: number): boolean } {
+  let seq = 0;
+  return {
+    next: () => ++seq,
+    isCurrent: (token) => token === seq,
+  };
+}
+
 /** A non-submitting button — the composer is a form, so the type matters. */
 export function button(className: string, text?: string): HTMLButtonElement {
   const btn = el('button', className, text);

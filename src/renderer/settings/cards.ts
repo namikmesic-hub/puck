@@ -2,17 +2,6 @@
 
 import { asButton, el } from '../dom';
 
-export { errText } from '../util';
-
-/** Monotonic request token: rapid section switches must not land stale content. */
-export function latestToken(): { next(): number; isCurrent(token: number): boolean } {
-  let seq = 0;
-  return {
-    next: () => ++seq,
-    isCurrent: (token) => token === seq,
-  };
-}
-
 export function loadingInto(container: HTMLElement): void {
   container.setAttribute('aria-busy', 'true');
   if (!container.children.length) container.appendChild(el('div', 'cards-loading', 'Loading…'));

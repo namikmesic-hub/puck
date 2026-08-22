@@ -1,11 +1,10 @@
 /**
  * Validation at the IPC boundary. The renderer is inside our app, but treat
- * its payloads as untrusted: ids feed file paths and docker argv, and
- * conversation payloads land on disk forever.
+ * its payloads as untrusted: ids feed file paths and docker argv. (The
+ * conversation payload codec lives with its format in conversations.ts.)
  */
 
-import type { AgentConfig, ConversationData, ConversationEntry, EnvironmentConfig } from '../harness/bridge';
-import type { HarnessEvent } from '../harness/types';
+import type { AgentConfig, EnvironmentConfig } from '../harness/bridge';
 import { isPlainObject } from '../harness/options';
 
 /** Store ids we mint (crypto.randomUUID() plus seeded slugs like `claude-default`). */
@@ -20,6 +19,30 @@ export function requireId(value: unknown, what: string): string {
 
 function str(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback;
+}
+
+/** Multi-argument channels ship one plain-object payload; anything else is a bug. */
+export function objArgs(value: unknown): Record<string, unknown> {
+  if (!isPlainObject(value)) throw new Error('Invalid IPC payload.');
+  return value;
+}
+
+/** Required string field with no format constraint (prompts, opaque turn ids). */
+export function requireString(value: unknown, what: string): string {
+  if (typeof value !== 'string') throw new Error(`Invalid ${what}.`);
+  return value;
+}
+
+/** Ask answers: null (dismissed) or a string→string record keyed by question. */
+export function askAnswersFrom(value: unknown): Record<string, string> | null {
+  if (value === null || value === undefined) return null;
+  if (!isPlainObject(value)) throw new Error('Invalid ask answers.');
+  const out: Record<string, string> = {};
+  for (const [key, answer] of Object.entries(value)) {
+    if (typeof answer !== 'string') throw new Error('Invalid ask answers.');
+    out[key] = answer;
+  }
+  return out;
 }
 
 /** Plain-object-or-empty; per-key schema validation happens in the agent store. */
@@ -49,43 +72,6 @@ export function requireSecretKey(value: unknown): string {
     throw new Error('Invalid secret key.');
   }
   return value;
-}
-
-/**
- * Conversation saves are renderer-authored and land on disk forever; enforce
- * the entry shape (the size ceiling lives in conversations.save, where the
- * payload is serialized anyway). Throws on malformed payloads so a renderer
- * bug surfaces as a failed save instead of a corrupted file.
- */
-export function convoDataFrom(raw: unknown): ConversationData {
-  if (!isPlainObject(raw)) throw new Error('Invalid conversation payload.');
-  if (!Array.isArray(raw.log)) throw new Error('Invalid conversation log.');
-  const num = (value: unknown): number =>
-    typeof value === 'number' && Number.isFinite(value) ? value : 0;
-  const log = raw.log.map((entry): ConversationEntry => {
-    if (typeof entry !== 'object' || entry === null) throw new Error('Invalid conversation entry.');
-    const e = entry as Record<string, unknown>;
-    if (e.kind === 'user') {
-      return {
-        kind: 'user',
-        text: str(e.text),
-        author: str(e.author, 'user'),
-        ts: num(e.ts),
-      };
-    }
-    if (e.kind === 'turn' && Array.isArray(e.events)) {
-      return { kind: 'turn', ts: num(e.ts), events: e.events as HarnessEvent[] };
-    }
-    throw new Error('Invalid conversation entry.');
-  });
-  return {
-    v: typeof raw.v === 'number' ? raw.v : 1,
-    log,
-    lastTurnTokens: num(raw.lastTurnTokens),
-    lastActiveAt: num(raw.lastActiveAt),
-    turns: num(raw.turns),
-    ...(typeof raw.draft === 'string' ? { draft: raw.draft } : {}),
-  };
 }
 
 export function envConfigFrom(raw: unknown): EnvironmentConfig {
