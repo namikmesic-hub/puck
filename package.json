@@ -5,12 +5,15 @@
   "description": "A macOS desktop client for coding agents — Claude Code and Codex conversations running in Docker sandboxes.",
   "main": ".webpack/main",
   "private": true,
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "start": "electron-forge start",
-    "package": "electron-forge package",
-    "make": "electron-forge make",
+    "package": "node scripts/forge.mjs package",
+    "make": "node scripts/forge.mjs make",
     "publish": "electron-forge publish",
-    "lint": "eslint --ext .ts,.tsx .",
+    "lint": "eslint --ext .ts,.tsx,.mjs .",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "test:e2e": "node test/e2e/smoke.mjs"
