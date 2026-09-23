@@ -320,12 +320,21 @@ async function doStart(id: string): Promise<EnvironmentInfo[]> {
   // Copy file-based CLI credentials from the host. Bind mounts are not
   // reliable for this across Docker runtimes (a colima VM without $HOME
   // sharing silently yields empty dirs), so docker cp on every start.
+  // Signed out of Puck and no host file: a mirror left from before the
+  // sign-out is stale (the logout fence only reaches running containers, see
+  // purgeCredentials) - remove it before anything in the container can use it.
   for (const p of providers) {
     const cred = p.container.credential;
-    if (!fs.existsSync(cred.hostPath)) continue;
-    const dest = path.posix.dirname(cred.containerPath) + '/';
-    await dockerOrThrow(['exec', containerName(id), 'mkdir', '-p', dest], `${p.label} credential setup failed`);
-    await dockerOrThrow(['cp', cred.hostPath, `${containerName(id)}:${dest}`], `${p.label} credential copy failed`);
+    if (fs.existsSync(cred.hostPath)) {
+      const dest = path.posix.dirname(cred.containerPath) + '/';
+      await dockerOrThrow(['exec', containerName(id), 'mkdir', '-p', dest], `${p.label} credential setup failed`);
+      await dockerOrThrow(['cp', cred.hostPath, `${containerName(id)}:${dest}`], `${p.label} credential copy failed`);
+    } else if (!cred.signedIn()) {
+      await dockerOrThrow(
+        ['exec', containerName(id), 'rm', '-f', cred.containerPath],
+        `${p.label} credential cleanup failed`,
+      );
+    }
   }
 
   // Deploy (or refresh) the runner agent.
@@ -369,7 +378,9 @@ async function injectSecretsFile(id: string): Promise<void> {
 /**
  * Write Puck-managed OAuth tokens into a container as the provider's CLI
  * credential file — unless the container already holds fresher ones (CLIs
- * rotate tokens themselves mid-session, which we adopt back).
+ * rotate tokens themselves mid-session, which we adopt back). A sign-out
+ * that happens while this runs wins: the snapshot's fence is checked before
+ * the copy, and again after it so a copy that raced the purge is undone.
  */
 async function injectCredentials(id: string, p: Provider): Promise<void> {
   const cred = p.container.credential;
@@ -380,11 +391,44 @@ async function injectCredentials(id: string, p: Provider): Promise<void> {
     cred.adoptIfNewer(existing.stdout);
     if (!snapshot.supersedes(existing.stdout)) return;
   }
+  if (!snapshot.current()) return; // signed out while we read the container copy
   await dockerOrThrow(
     ['exec', containerName(id), 'mkdir', '-p', path.posix.dirname(cred.containerPath)],
     `${p.label} credential setup failed`,
   );
   await copyIntoContainer(id, snapshot.content, cred.containerPath, `${p.label} credential copy failed`);
+  if (!snapshot.current()) {
+    await dockerOrThrow(
+      ['exec', containerName(id), 'rm', '-f', cred.containerPath],
+      `${p.label} credential cleanup failed`,
+    );
+  }
+}
+
+/**
+ * The container side of the logout fence: remove the provider's credential
+ * file Puck mirrored into every RUNNING environment (a stopped container is
+ * cleaned on its next start, see doStart). Deliberately not an env op: it
+ * must neither wait behind a long bootstrap nor quiesce a runner, and it
+ * needs no mutex - the account is already signed out, so nothing re-injects
+ * (injectCredentials re-checks its fence after copying). Reports the
+ * environments it could not clean; the sign-out itself has already held.
+ */
+export async function purgeCredentials(p: Provider): Promise<void> {
+  const failures: string[] = [];
+  for (const env of load().environments) {
+    if ((await runtimeStatus(env.id)) !== 'running') continue;
+    const r = await docker(['exec', containerName(env.id), 'rm', '-f', p.container.credential.containerPath]);
+    if (r.code !== 0 && !/is not running|no such container/i.test(r.stderr)) {
+      failures.push(`${env.name}: ${r.stderr.trim().slice(-200) || 'docker exec failed'}`);
+    }
+  }
+  if (failures.length) {
+    throw new Error(
+      `Signed out, but the ${p.label} credential file could not be removed from ` +
+        `${failures.length === 1 ? 'environment' : 'environments'} ${failures.join('; ')}`,
+    );
+  }
 }
 
 /** Push freshly obtained credentials into every running environment. */

@@ -22,6 +22,11 @@ describe('conversations', () => {
     expect(fs.existsSync(file('agent-big'))).toBe(false);
   });
 
+  it('round-trips the composer draft through disk', async () => {
+    await conversations.save('agent-draft', { ...empty, draft: 'half-typed message' });
+    expect(conversations.loadAll()['agent-draft']?.draft).toBe('half-typed message');
+  });
+
   it('normalizes legacy shapes on load and skips log-less snapshots', () => {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(file('agent-old'), JSON.stringify({ log: [], usage: 42, lastActiveAt: 7, turns: 3 }));

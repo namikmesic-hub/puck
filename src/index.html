@@ -115,8 +115,10 @@
               <div class="settings-section hidden" id="sec-providers">
                 <h2 class="page-title" id="sec-providers-title" tabindex="-1">Providers</h2>
                 <p class="page-sub">
-                  Sign in once per provider — tokens are stored encrypted and injected into every
-                  environment. Logins open in their own window.
+                  Sign in once per provider. The sign-in opens in your browser. Tokens are stored
+                  in the OS keychain (Electron safeStorage) and copied into every environment. If
+                  the keychain is unavailable, Puck refuses to store them rather than fall back to
+                  plaintext. Disconnect removes Puck's tokens and the copies in running environments.
                 </p>
                 <div class="form-msg" id="provider-msg"></div>
                 <div class="cards" id="provider-cards"></div>
@@ -171,7 +173,7 @@
                   </div>
                 </div>
                 <div class="editor-sec">
-                  <h4>Secrets <span class="hint-inline">encrypted at rest · injected as env vars</span></h4>
+                  <h4>Secrets <span class="hint-inline">stored in the OS keychain, never in plaintext · injected as env vars</span></h4>
                   <div class="kv-list" id="d-secrets"></div>
                   <div class="kv-add">
                     <input id="d-secret-key" placeholder="KEY" />

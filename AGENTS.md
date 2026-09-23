@@ -31,7 +31,19 @@ CI runs these plus `node --check src/main/runner/runner.js` and `npm run package
   `preload.ts` and `src/index.ts` both import it.
   The `satisfies` clause keeps it total over `PuckBridge`, and `test/unit/channels.test.ts` asserts main registers a handler for every entry.
   Adding a bridge method = bridge type + CHANNELS entry + preload line + handler.
+  Push channels from main to the renderer (`EVENT_CHANNEL`, `FLUSH_CHANNEL`, `FLUSHED_CHANNEL`) sit outside the table.
+  The `satisfies` clause excludes their bridge methods by name.
 - **Provider ids** (`claude-code`, `codex`) are persisted in user stores - never rename them.
+- **Quit is a drain** (`src/main/shutdown.ts`).
+  The first `before-quit` is held while the renderer flushes and every queued store write settles.
+  The renderer flush runs over `FLUSH_CHANNEL` into `session-store.flushPending`, which saves debounced conversations and the composer draft.
+  `jsonstore.flushWrites` awaits the queued writes.
+  Then quit re-issues, bounded by a timeout.
+  Anything that must survive quit goes through `jsonstore` in main or the session store's `persist` in the renderer.
+- **Secrets** (`src/main/secrets.ts`) have one backend, Electron safeStorage.
+  `saveSecret` throws `SecureStorageUnavailableError` when the keychain cannot encrypt.
+  There is no plaintext fallback, and a file that does not decrypt reads as absent.
+  The Settings copy in `index.html` states this behavior.
 - **Persisted stores** live in Electron `userData`.
   Migrate, don't break: new fields get `??` defaults at load, and legacy keys are dual-read, never rewritten in place.
   Layout: `puck-agents.json`, `puck-environments.json`, `puck-resume.json`, `puck-convos/<agentId>.json` (one file per agent), and encrypted `*.bin` secrets.
@@ -55,6 +67,11 @@ CI runs these plus `node --check src/main/runner/runner.js` and `npm run package
   Claude binds an ephemeral port (`http://localhost:<port>/callback`, the shape Claude Code registers).
   Codex uses its registered fixed port 1455.
   There is no embedded sign-in window or cookie partition - logout only clears Puck's own token store.
+  Logout is a fence, implemented by `createOAuthAccount` in `src/main/providers/oauth.ts`.
+  It advances an epoch, so an exchange or refresh already in flight drops its result (`LogoutFence`).
+  Adoption of container credentials requires a signed-in account.
+  `environments.purgeCredentials` removes the mirrored file from running containers, and a stopped container is cleaned on its next start.
+  Any new path that writes tokens asynchronously must take a fence first.
 - **colima** does not share `$HOME` with containers, so credential files reach containers via `docker cp` only.
   Host dirs are deliberately not mounted (sandbox escape via CLI hook files).
 
@@ -82,7 +99,7 @@ CI runs these plus `node --check src/main/runner/runner.js` and `npm run package
 
 ## Layout
 
-- `src/index.ts` - main process: window hardening and IPC handler registration.
+- `src/index.ts` - main process: window hardening, IPC handler registration, and quit drain wiring.
   Ids, strings, and configs are validated in `src/main/ipcguard.ts`.
   The conversation payload codec lives with its format in `src/main/conversations.ts`: strict `fromIpc` on save, lenient `normalize` on load, one shared field assembly.
 - `src/harness/` - the renderer↔main contract.
@@ -92,8 +109,9 @@ CI runs these plus `node --check src/main/runner/runner.js` and `npm run package
 - `src/main/providers/` - the Provider interface and registry.
   See its README header comment for what a new provider needs.
 - `src/main/backend.ts` - turn orchestration: active agent × environment, resume-id map, stale-resume retry state machine.
-- `src/main/environments.ts` - Docker lifecycle, bootstrap, credential and secret injection (all registry-driven, no provider names).
+- `src/main/environments.ts` - Docker lifecycle, bootstrap, credential and secret injection, credential purge on logout (all registry-driven, no provider names).
 - `src/main/runner.ts` - docker-exec stdio bridge (handshake, watchdog, stderr diagnostics, `WIRE` contract).
+- `src/main/shutdown.ts` - the quit drain (`installQuitDrain`) and the renderer flush request (`flushRenderers`).
 - `src/renderer.ts` - the wiring layer: DOM lookups, nav applier and settings modal, composer/turn loop, settings card grids, shortcuts, boot.
   `nav()` is the single entry point for navigation.
   Element ids follow prefixes: `a-*` agent editor, `d-*` environment editor, `sec-*` settings sections, `aed-*` agent-editor cards, `sm-*` settings modal.
@@ -101,7 +119,7 @@ CI runs these plus `node --check src/main/runner/runner.js` and `npm run package
   The import order in `renderer.ts` preserves the cascade.
 - `src/renderer/` - extracted, unit-tested modules.
   The house style (proven by `options.ts`): context/elements in, controller out, no `getElementById` inside, jsdom tests.
-  - `session-store.ts` - the Session model: conversations, sub-agent children, spawn/teardown, rename sync, debounced persistence.
+  - `session-store.ts` - the Session model: conversations, sub-agent children, spawn/teardown, rename sync, debounced persistence, the quit flush.
   - `chat-view.ts` - message rows, Slack grouping, streaming turns (markdown committer, tool cards, sub-agents behind a `spawnChild` seam), replay (`REPLAY_WINDOW`), full-turn overlay.
   - `ask-card.ts` - the mid-turn question card (live and replay variants, submit hook rejects to re-arm).
   - `roster.ts` - the sidebar list: agent rows, unread/running dots, nested sub-agent chats, rAF-coalesced `render()`.

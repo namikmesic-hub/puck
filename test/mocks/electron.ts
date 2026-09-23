@@ -15,13 +15,26 @@ export const app = {
   isPackaged: false,
 };
 
+/** Stand-in for the OS keychain: a marker prefix plus base64 plays the role
+ *  of encryption - the stored bytes never contain the plaintext, a file
+ *  without the marker fails to decrypt (as a plaintext file would), and
+ *  `available` can be flipped to simulate a locked or missing keychain. */
+const MAGIC = Buffer.from('puck-test-enc:');
 export const safeStorage = {
-  isEncryptionAvailable: (): boolean => false,
-  encryptString: (s: string): Buffer => Buffer.from(s, 'utf8'),
-  decryptString: (b: Buffer): string => b.toString('utf8'),
+  available: true,
+  isEncryptionAvailable: (): boolean => safeStorage.available,
+  encryptString: (s: string): Buffer =>
+    Buffer.concat([MAGIC, Buffer.from(Buffer.from(s, 'utf8').toString('base64'), 'ascii')]),
+  decryptString: (b: Buffer): string => {
+    if (!b.subarray(0, MAGIC.length).equals(MAGIC)) throw new Error('not an encrypted payload');
+    return Buffer.from(b.subarray(MAGIC.length).toString('ascii'), 'base64').toString('utf8');
+  },
 };
 
 export class BrowserWindow {
+  static getAllWindows(): BrowserWindow[] {
+    return [];
+  }
   webContents = { on: (): void => undefined, setWindowOpenHandler: (): void => undefined };
   loadURL(): void {
     /* never navigates in tests */
@@ -38,6 +51,12 @@ export const ipcMain = {
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   handle(channel: string, fn: (...args: unknown[]) => unknown): void {
     ipcMain.handlers.set(channel, fn);
+  },
+  on(): void {
+    /* one-way listeners are not exercised in unit tests */
+  },
+  removeListener(): void {
+    /* see on() */
   },
 };
 

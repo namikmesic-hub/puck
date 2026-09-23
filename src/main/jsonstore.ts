@@ -40,5 +40,19 @@ export function writeTextAtomic(file: string, text: string): Promise<void> {
   next.catch((err) => {
     console.error(`jsonstore: write to ${file} failed:`, err);
   });
+  // Forget a settled tail so flushWrites() only ever waits on real work.
+  const settled = (): void => {
+    if (chains.get(file) === next) chains.delete(file);
+  };
+  next.then(settled, settled);
   return next;
+}
+
+/**
+ * Resolves once every write queued so far - and any queued while waiting -
+ * has settled (failures included; they are logged above). The quit drain
+ * awaits this so a save issued moments before quit still reaches disk.
+ */
+export async function flushWrites(): Promise<void> {
+  while (chains.size) await Promise.allSettled([...chains.values()]);
 }

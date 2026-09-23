@@ -27,10 +27,18 @@ export interface ProviderAuth {
   start(): Promise<string>;
   /** Abort a pending login (no-op when none is pending). */
   cancel(): void;
-  /** Drop Puck's stored tokens (and abort a pending login). */
-  logout(): void;
+  /**
+   * Sign out - a fence: abort a pending login, drop Puck's stored tokens so
+   * that an exchange or refresh still in flight is discarded and container
+   * copies are never adopted back, then run the logout hook (the host removes
+   * the credentials it mirrored into containers). Rejects when the hook
+   * fails; the local sign-out has already held by then.
+   */
+  logout(): Promise<void>;
   /** Invoked whenever a login lands (host pushes creds into running envs). */
   setOnLogin(cb: () => void): void;
+  /** Invoked after the local fence on logout (host removes container mirrors). */
+  setOnLogout(cb: () => Promise<void> | void): void;
 }
 
 /** A CLI credential file Puck mirrors between host and containers. */
@@ -39,12 +47,20 @@ export interface ProviderCredential {
   hostPath: string;
   /** Full in-container path Puck reads/writes (and `cat`s on stop). */
   containerPath: string;
+  /** True while Puck holds tokens for this provider (no refresh, no network). */
+  signedIn(): boolean;
   /**
    * Fresh serialized body (refreshing tokens when stale), or null when logged
    * out. `supersedes(theirs)` must be true when our copy should overwrite the
    * container's — strictly fresher, or the container copy is unparseable.
+   * `current()` turns false once the user signs out after the snapshot was
+   * taken; writers check it before and after copying the body anywhere.
    */
-  fresh(): Promise<{ content: string; supersedes(containerJson: string): boolean } | null>;
+  fresh(): Promise<{
+    content: string;
+    supersedes(containerJson: string): boolean;
+    current(): boolean;
+  } | null>;
   /** Adopt container-side tokens when fresher (CLIs rotate them mid-session). */
   adoptIfNewer(containerJson: string): void;
 }

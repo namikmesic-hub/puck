@@ -167,11 +167,14 @@ export function createSessionStore(ctx: SessionStoreContext) {
     return renamed;
   }
 
-  /** Persist a conversation's structured log; failures surface via ctx. */
-  function persist(session: Session): void {
-    if (!session.agentId) return;
+  /**
+   * Persist a conversation's structured log; failures surface via ctx.
+   * Resolves once the save settled (never rejects) so a quit flush can wait.
+   */
+  function persist(session: Session): Promise<void> {
+    if (!session.agentId) return Promise.resolve();
     if (session === mounted) session.draft = ctx.currentDraft();
-    void ctx
+    return ctx
       .save(session.agentId, {
         v: 1,
         log: session.log,
@@ -183,21 +186,38 @@ export function createSessionStore(ctx: SessionStoreContext) {
       .catch((err: Error) => ctx.onSaveError(session, err));
   }
 
-  const persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Pending debounced saves, keyed by agent id. */
+  const persistTimers = new Map<string, { timer: ReturnType<typeof setTimeout>; session: Session }>();
 
-  /** Debounced mid-turn save so a crash loses seconds, not the whole exchange. */
+  /**
+   * Debounced save: mid-turn so a crash loses seconds, not the whole
+   * exchange; after typing so an idle composer draft reaches disk.
+   */
   function schedulePersist(session: Session): void {
     if (!session.agentId) return;
     const key = session.agentId;
-    const existing = persistTimers.get(key);
-    if (existing) return;
-    persistTimers.set(
-      key,
-      setTimeout(() => {
-        persistTimers.delete(key);
-        persist(session);
-      }, 2000),
-    );
+    if (persistTimers.has(key)) return;
+    const timer = setTimeout(() => {
+      persistTimers.delete(key);
+      void persist(session);
+    }, 2000);
+    persistTimers.set(key, { timer, session });
+  }
+
+  /**
+   * Quit / unload: run every pending debounced save now and persist the
+   * mounted conversation - its composer draft lives in the live textarea, so
+   * an idle draft is only captured here. Resolves once the saves settled.
+   */
+  function flushPending(): Promise<void> {
+    const due = new Set<Session>();
+    for (const { timer, session } of persistTimers.values()) {
+      clearTimeout(timer);
+      due.add(session);
+    }
+    persistTimers.clear();
+    if (mounted?.agentId) due.add(mounted);
+    return Promise.all([...due].map(persist)).then(() => undefined);
   }
 
   return {
@@ -212,6 +232,7 @@ export function createSessionStore(ctx: SessionStoreContext) {
     syncAgentNames,
     persist,
     schedulePersist,
+    flushPending,
     setMounted(session: Session | null): void {
       mounted = session;
     },

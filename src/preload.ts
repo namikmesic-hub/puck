@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { BridgeEventPayload, EnvironmentConfig, PuckBridge } from './harness/bridge';
-import { CHANNELS, EVENT_CHANNEL } from './harness/channels';
+import { CHANNELS, EVENT_CHANNEL, FLUSH_CHANNEL, FLUSHED_CHANNEL } from './harness/channels';
 
 const bridge: PuckBridge = {
   status: () => ipcRenderer.invoke(CHANNELS.status),
@@ -37,6 +37,14 @@ const bridge: PuckBridge = {
     ipcRenderer.invoke(CHANNELS.answerAsk, { turnId, askId, answers }),
   onEvent: (cb) => {
     ipcRenderer.on(EVENT_CHANNEL, (_event, payload: BridgeEventPayload) => cb(payload));
+  },
+  onFlush: (cb) => {
+    ipcRenderer.on(FLUSH_CHANNEL, (_event, token: string) => {
+      // Acknowledge even when a save failed - quit must not wait on a broken save.
+      void cb()
+        .catch(() => undefined)
+        .then(() => ipcRenderer.send(FLUSHED_CHANNEL, token));
+    });
   },
 };
 

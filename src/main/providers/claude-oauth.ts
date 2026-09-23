@@ -12,7 +12,7 @@
 
 import { shell } from 'electron';
 import { LoginCancelledError, startLoopback, type LoopbackListener } from './loopback';
-import { createOAuthAccount, pkce, randomState } from './oauth';
+import { createOAuthAccount, pkce, randomState, type LogoutFence } from './oauth';
 
 const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'; // Claude Code's public OAuth client
 const AUTHORIZE_URL = 'https://claude.ai/oauth/authorize';
@@ -93,6 +93,7 @@ export function cancelLogin(): void {
  */
 export async function startLogin(): Promise<string> {
   cancelLogin(); // a new attempt supersedes any pending one
+  const fence = account.fence(); // a logout during the exchange discards its result
   const { verifier, challenge } = pkce(32);
   const state = randomState();
   const listener = await startLoopback({ path: CALLBACK_PATH, state });
@@ -111,8 +112,10 @@ export async function startLogin(): Promise<string> {
   const url = `${AUTHORIZE_URL}?${params.toString()}`;
 
   listener.code
-    .then((code) => exchange(code, { redirectUri, verifier, state }))
-    .then(() => account.notifyLogin())
+    .then((code) => exchange(code, { redirectUri, verifier, state }, fence))
+    .then((saved) => {
+      if (saved) account.notifyLogin();
+    })
     .catch((err) => {
       if (!(err instanceof LoginCancelledError)) account.recordError(err);
     })
@@ -124,10 +127,12 @@ export async function startLogin(): Promise<string> {
   return url;
 }
 
+/** Exchange the code for tokens; false when a logout tripped `fence` meanwhile. */
 async function exchange(
   code: string,
   attempt: { redirectUri: string; verifier: string; state: string },
-): Promise<void> {
+  fence: LogoutFence,
+): Promise<boolean> {
   const res = await fetch(TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -149,12 +154,15 @@ async function exchange(
     expires_in?: number;
     scope?: string;
   };
-  account.save({
-    accessToken: data.access_token,
-    refreshToken: data.refresh_token,
-    expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
-    scopes: data.scope ? data.scope.split(' ') : ['user:inference', 'user:profile'],
-  });
+  return account.save(
+    {
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+      expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
+      scopes: data.scope ? data.scope.split(' ') : ['user:inference', 'user:profile'],
+    },
+    fence,
+  );
 }
 
 /** The ~/.claude/.credentials.json body Claude Code reads on Linux. */

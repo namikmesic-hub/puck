@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { createOAuthAccount } from '../../src/main/providers/oauth';
+import { createOAuthAccount, providerCredential } from '../../src/main/providers/oauth';
 import { deleteSecret } from '../../src/main/secrets';
 
 interface Tok {
@@ -31,16 +31,18 @@ function makeAccount(refresh: (t: Tok) => Promise<Tok | null>) {
 }
 
 describe('createOAuthAccount', () => {
-  it('round-trips tokens and clears on logout', () => {
+  it('round-trips tokens and clears on logout', async () => {
     const account = makeAccount(async (t) => t);
     account.save({ v: 'a', at: 5000 });
     expect(account.load()).toEqual({ v: 'a', at: 5000 });
-    account.logout();
+    await account.logout();
     expect(account.load()).toBeNull();
   });
 
-  it('adopts container credentials only when strictly fresher', () => {
+  it('adopts container credentials only when strictly fresher, and only while signed in', () => {
     const account = makeAccount(async (t) => t);
+    account.adoptIfNewer(JSON.stringify({ v: 'stranger', at: 50 }));
+    expect(account.load()).toBeNull(); // never signed in: a container copy is not ours
     account.save({ v: 'ours', at: 100 });
     account.adoptIfNewer(JSON.stringify({ v: 'older', at: 50 }));
     expect(account.load()?.v).toBe('ours');
@@ -79,5 +81,83 @@ describe('createOAuthAccount', () => {
     expect(await account.getFreshTokens()).toEqual({ v: 'x', at: 5000 });
     expect(await account.getFreshTokens()).toEqual({ v: 'x', at: 5000 }); // now fresh
     expect(refreshes).toBe(1);
+  });
+
+  // Logout is a fence: every path that could write tokens after a sign-out
+  // must find its result dropped, and nothing may sign the account back in.
+  describe('logout fence', () => {
+    it('drops a login exchange that lands after logout, keeps one started after it', async () => {
+      const account = makeAccount(async (t) => t);
+      const beforeLogout = account.fence(); // taken when the login started
+      await account.logout();
+      expect(account.save({ v: 'late', at: 9000 }, beforeLogout)).toBe(false);
+      expect(account.load()).toBeNull();
+      const afterLogout = account.fence();
+      expect(account.save({ v: 'next', at: 9001 }, afterLogout)).toBe(true);
+      expect(account.load()?.v).toBe('next');
+    });
+
+    it('drops a refresh that completes after logout and reports signed out', async () => {
+      let release!: (t: Tok) => void;
+      const account = makeAccount(() => new Promise<Tok>((r) => (release = r)));
+      account.save({ v: 'stale', at: 10 }); // at < 1000 → needsRefresh
+      const refreshing = account.getFreshTokens();
+      await account.logout();
+      release({ v: 'refreshed', at: 9000 });
+      expect(await refreshing).toBeNull();
+      expect(account.load()).toBeNull();
+      expect(account.lastError()).toBeNull();
+    });
+
+    it('a refresh that fails after logout leaves no error on the signed-out account', async () => {
+      let fail!: (err: Error) => void;
+      const account = makeAccount(() => new Promise<Tok>((_, reject) => (fail = reject)));
+      account.save({ v: 'stale', at: 10 });
+      const refreshing = account.getFreshTokens();
+      await account.logout();
+      fail(new Error('network down'));
+      expect(await refreshing).toBeNull();
+      expect(account.lastError()).toBeNull();
+    });
+
+    it('container credentials never sign a logged-out account back in', async () => {
+      const account = makeAccount(async (t) => t);
+      account.save({ v: 'ours', at: 100 });
+      await account.logout();
+      account.adoptIfNewer(JSON.stringify({ v: 'container', at: 5000 }));
+      expect(account.load()).toBeNull();
+      expect(account.supersedes(JSON.stringify({ v: 'container', at: 5000 }))).toBe(false);
+    });
+
+    it('runs the logout hook after the local fence and propagates its failure', async () => {
+      const account = makeAccount(async (t) => t);
+      account.save({ v: 'x', at: 100 });
+      const seenByHook: Array<Tok | null> = [];
+      account.setOnLogout(async () => {
+        seenByHook.push(account.load());
+        throw new Error('container busy');
+      });
+      await expect(account.logout()).rejects.toThrow(/container busy/);
+      expect(seenByHook).toEqual([null]); // tokens were already gone when the hook ran
+      expect(account.load()).toBeNull();
+    });
+
+    it('a credential snapshot knows when a logout happened after it was taken', async () => {
+      const account = makeAccount(async (t) => t);
+      account.save({ v: 'x', at: 5000 });
+      const cred = providerCredential(account, {
+        hostPath: '/host/cred',
+        containerPath: '/root/.cli/cred',
+        serialize: (t) => t.v,
+      });
+      expect(cred.signedIn()).toBe(true);
+      const snapshot = await cred.fresh();
+      expect(snapshot?.content).toBe('x');
+      expect(snapshot?.current()).toBe(true);
+      await account.logout();
+      expect(snapshot?.current()).toBe(false);
+      expect(cred.signedIn()).toBe(false);
+      expect(await cred.fresh()).toBeNull();
+    });
   });
 });

@@ -11,7 +11,7 @@
 
 import { shell } from 'electron';
 import { LoginCancelledError, startLoopback, type LoopbackListener } from './loopback';
-import { createOAuthAccount, pkce, randomState } from './oauth';
+import { createOAuthAccount, pkce, randomState, type LogoutFence } from './oauth';
 
 const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'; // Codex CLI's public OAuth client
 const ISSUER = 'https://auth.openai.com';
@@ -111,7 +111,8 @@ function accountIdFromIdToken(idToken: string): string {
   }
 }
 
-async function exchangeCode(code: string, verifier: string): Promise<void> {
+/** Exchange the code for tokens; false when a logout tripped `fence` meanwhile. */
+async function exchangeCode(code: string, verifier: string, fence: LogoutFence): Promise<boolean> {
   const res = await fetch(`${ISSUER}/oauth/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -131,13 +132,16 @@ async function exchangeCode(code: string, verifier: string): Promise<void> {
     access_token: string;
     refresh_token: string;
   };
-  account.save({
-    idToken: data.id_token,
-    accessToken: data.access_token,
-    refreshToken: data.refresh_token,
-    accountId: accountIdFromIdToken(data.id_token),
-    lastRefresh: new Date().toISOString(),
-  });
+  return account.save(
+    {
+      idToken: data.id_token,
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+      accountId: accountIdFromIdToken(data.id_token),
+      lastRefresh: new Date().toISOString(),
+    },
+    fence,
+  );
 }
 
 /**
@@ -147,6 +151,7 @@ async function exchangeCode(code: string, verifier: string): Promise<void> {
  */
 export async function startLogin(): Promise<string> {
   cancelLogin(); // a new attempt supersedes any pending one
+  const fence = account.fence(); // a logout during the exchange discards its result
   const { verifier, challenge } = pkce(64);
   const state = randomState();
   const url =
@@ -175,8 +180,10 @@ export async function startLogin(): Promise<string> {
   pending = listener;
 
   listener.code
-    .then((code) => exchangeCode(code, verifier))
-    .then(() => account.notifyLogin())
+    .then((code) => exchangeCode(code, verifier, fence))
+    .then((saved) => {
+      if (saved) account.notifyLogin();
+    })
     .catch((err) => {
       if (!(err instanceof LoginCancelledError)) account.recordError(err);
     })

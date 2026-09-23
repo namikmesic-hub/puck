@@ -103,9 +103,59 @@ describe('session store', () => {
     it('never persists child sessions (they have no agentId)', () => {
       const { store, save } = makeStore();
       const child = store.spawnChild(store.conversationFor(info('a1', 'Claude')));
-      store.persist(child);
+      void store.persist(child);
       store.schedulePersist(child);
       expect(save).not.toHaveBeenCalled();
+    });
+
+    // Quit / unload: nothing pending may be lost, and the idle draft in the
+    // live composer must reach disk although no timer was ever scheduled.
+    it('flushPending runs due saves now and captures the mounted draft', async () => {
+      const { store, save } = makeStore();
+      const shown = store.conversationFor(info('a1', 'Claude'));
+      const background = store.conversationFor(info('a2', 'Codex'));
+      store.setMounted(shown);
+      store.schedulePersist(background); // debounced, not yet due
+      await store.flushPending();
+      const byAgent = new Map(save.mock.calls.map(([agentId, data]) => [agentId, data]));
+      expect([...byAgent.keys()].sort()).toEqual(['a1', 'a2']);
+      expect(byAgent.get('a1')?.draft).toBe('draft-text'); // read from the live composer
+      await vi.advanceTimersByTimeAsync(2100);
+      expect(save).toHaveBeenCalledTimes(2); // the cleared timer never fires again
+    });
+
+    it('flushPending resolves only after the saves settled, even a failing one', async () => {
+      let fail!: () => void;
+      const save = vi.fn(
+        () => new Promise<void>((_, reject) => (fail = () => reject(new Error('disk full')))),
+      );
+      const onSaveError = vi.fn();
+      const store = createSessionStore({
+        interrupt: () => undefined,
+        save,
+        onSaveError,
+        currentDraft: () => 'draft-text',
+      });
+      const shown = store.conversationFor(info('a1', 'Claude'));
+      store.setMounted(shown);
+      let settled = false;
+      const flushing = store.flushPending().then(() => (settled = true));
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      fail();
+      await flushing;
+      expect(onSaveError).toHaveBeenCalledWith(shown, expect.any(Error));
+    });
+
+    it('a typed draft debounces into a save that carries it', async () => {
+      const { store, save } = makeStore();
+      const shown = store.conversationFor(info('a1', 'Claude'));
+      store.setMounted(shown);
+      store.schedulePersist(shown); // what the composer's input handler does
+      await vi.advanceTimersByTimeAsync(2100);
+      expect(save).toHaveBeenCalledTimes(1);
+      expect(save.mock.calls[0][1].draft).toBe('draft-text');
+      expect(save.mock.calls[0][1].log).toEqual([]); // a draft on a fresh conversation is still saved
     });
   });
 });
