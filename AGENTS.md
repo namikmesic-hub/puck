@@ -9,10 +9,18 @@ npm run typecheck && npm run lint && npm test
 ```
 
 Lint is at **zero problems** — keep it there. CI runs these plus
-`node --check src/main/runner/runner.js`.
+`node --check src/main/runner/runner.js` and `npm run package`.
 
 ## Things that bite
 
+- **Builds run on Node 22 only** — the major pinned in `.nvmrc` (mirrored by
+  `engines` in `package.json`; CI reads `.nvmrc`). `npm run package` and
+  `npm run make` go through `scripts/forge.mjs`, which refuses other Node
+  majors and fails when Forge exits 0 without a fresh app bundle under `out/`
+  (Forge has done exactly that on a newer Node). CI installs with `npm ci`,
+  so regenerate a drifted lockfile with the pinned Node's npm
+  (`npm install --package-lock-only`); `test/unit/build-checks.test.ts` keeps
+  the pin, the CI workflow, and the scripts in agreement.
 - **The container runner** (`src/main/runner/runner.js`) is plain CommonJS
   deployed INTO Docker containers — it cannot import host code, and changes
   only take effect after an environment restart/rebuild from Settings. Its

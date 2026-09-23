@@ -33,7 +33,7 @@ and Claude's mid-turn questions render as answerable cards.
 
 - macOS with [Docker](https://docs.docker.com/) running (Docker Desktop or
   colima — bind-mount quirks are handled either way)
-- Node 22+
+- Node 22 - the major pinned in `.nvmrc`; builds refuse any other
 
 ## Run
 
