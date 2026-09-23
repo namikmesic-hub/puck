@@ -139,6 +139,84 @@
   box-shadow: 0 0 6px rgba(46, 94, 78, 0.45);
 }
 
+/* Lifecycle tones: busy (starting / stopping) pulses amber, failed is red. */
+.status.busy {
+  color: #8a6d1d;
+}
+
+.status.busy .dot {
+  background: var(--gold);
+  animation: lifecycle-pulse 1.2s ease-in-out infinite;
+}
+
+.status.bad {
+  color: var(--red);
+}
+
+.status.bad .dot {
+  background: var(--red);
+}
+
+@keyframes lifecycle-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(212, 175, 55, 0.5);
+  }
+  50% {
+    opacity: 0.55;
+    box-shadow: 0 0 0 4px rgba(212, 175, 55, 0);
+  }
+}
+
+/* Stage · elapsed line under a status chip (env cards + env detail header). */
+.env-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  font-size: 12px;
+  color: var(--gray);
+}
+
+.env-progress:empty {
+  display: none;
+}
+
+.env-progress-line {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.env-progress.failed .env-progress-line {
+  color: var(--red);
+}
+
+.env-progress-detail {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--gray-light);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.env-progress.failed .env-progress-detail {
+  white-space: normal;
+  color: var(--red);
+  font-family: var(--font-ui);
+  font-size: 12px;
+}
+
+.card .env-progress {
+  margin: 6px 0 2px;
+}
+
+#detail-progress {
+  margin: -6px 0 6px;
+}
+
 .badge-active {
   flex: none;
   font-size: 9.5px;

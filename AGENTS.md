@@ -31,8 +31,25 @@ CI runs these plus `node --check src/main/runner/runner.js` and `npm run package
   `preload.ts` and `src/index.ts` both import it.
   The `satisfies` clause keeps it total over `PuckBridge`, and `test/unit/channels.test.ts` asserts main registers a handler for every entry.
   Adding a bridge method = bridge type + CHANNELS entry + preload line + handler.
-  Push channels from main to the renderer (`EVENT_CHANNEL`, `FLUSH_CHANNEL`, `FLUSHED_CHANNEL`) sit outside the table.
+  Push channels from main to the renderer (`EVENT_CHANNEL`, `ENV_EVENT_CHANNEL`, `FLUSH_CHANNEL`, `FLUSHED_CHANNEL`) sit outside the table.
   The `satisfies` clause excludes their bridge methods by name.
+- **Environment readiness is Puck state, not Docker liveness.**
+  `EnvLifecycle` (`src/harness/bridge.ts`) has the states stopped, starting, ready, stopping, and failed.
+  The reducer and its invariants live in `src/main/env-lifecycle.ts`: `ready` is reachable only through the `probing-runner` stage, after the runner handshake.
+  `environments.ts` owns the state and streams every stage through `onLifecycle`, and `backend.ts` gates turns on `lifecycle(id).status === 'ready'`.
+  A container found running at boot is re-provisioned through the normal start before it is trusted.
+  Credential purge and push still follow Docker liveness, because the file must land wherever a container exists.
+  Labels and messages shared by both processes live in `src/harness/lifecycle.ts`.
+  Reserve "is Docker running?" for a failed `dockerHealth()` check, never for a slow pull or run.
+- **Docker CLI discovery** (`src/main/docker-discovery.ts`): Finder launches do not inherit the shell PATH.
+  The binary is resolved in this order: configured path (`PUCK_DOCKER_BIN`), well-known install locations, inherited PATH, login-shell probe.
+  The not-found error lists what was searched.
+  Everything goes through `docker-client.ts` (argv, timeouts, abort signal, line streaming), and `TIMEOUTS` in `environments.ts` is the one table.
+- **Provider packages are pinned** (`PinnedPackage` in `src/main/providers/types.ts`).
+  `provisioning.ts` checks the installed versions read-only, installs the exact pins only on drift, and verifies the result on every start.
+  With auto-install on, any drift fails the start, and with it off only a missing SDK fails.
+  Bump a pin deliberately, together with any runner.js adaptation.
+  colima does not share host temp dirs either, so scripts reach containers as `sh -lc` arguments.
 - **Provider ids** (`claude-code`, `codex`) are persisted in user stores - never rename them.
 - **Quit is a drain** (`src/main/shutdown.ts`).
   The first `before-quit` is held while the renderer flushes and every queued store write settles.
@@ -109,7 +126,7 @@ CI runs these plus `node --check src/main/runner/runner.js` and `npm run package
 - `src/main/providers/` - the Provider interface and registry.
   See its README header comment for what a new provider needs.
 - `src/main/backend.ts` - turn orchestration: active agent × environment, resume-id map, stale-resume retry state machine.
-- `src/main/environments.ts` - Docker lifecycle, bootstrap, credential and secret injection, credential purge on logout (all registry-driven, no provider names).
+- `src/main/environments.ts` - Puck lifecycle state, Docker lifecycle, bootstrap, credential and secret injection, credential purge on logout (all registry-driven, no provider names).
 - `src/main/runner.ts` - docker-exec stdio bridge (handshake, watchdog, stderr diagnostics, `WIRE` contract).
 - `src/main/shutdown.ts` - the quit drain (`installQuitDrain`) and the renderer flush request (`flushRenderers`).
 - `src/renderer.ts` - the wiring layer: DOM lookups, nav applier and settings modal, composer/turn loop, settings card grids, shortcuts, boot.
@@ -127,12 +144,16 @@ CI runs these plus `node --check src/main/runner/runner.js` and `npm run package
   - `settings/agent-editor.ts` - segmented pickers, dirty tracking, section rail and scroll-spy, epoch-guarded async population, save.
   - `settings/env-editor.ts` - the environment detail page: config form, env-var/secret kv lists, header with the shared op rail, save.
   - `settings/cards.ts` and `settings/env-rail.ts` - card-grid kit and the ONE environment op ladder (list cards and detail header share it).
+  - `env-progress.ts` - lifecycle presentation: status chip, "stage · elapsed" line, and composer gate text.
+    Its tracker merges pushed lifecycle events and runs the elapsed-time ticker.
   - `nav.ts` - pure nav state machine (`navTransition`, `escapeTarget`).
   - `options.ts`, `util.ts`, `dom.ts`, `format.ts`, `markdown.ts`.
 
 ## Roadmap (deliberately deferred)
 
 - Runner as a typed per-provider adapter bundle (retires the hand-synced `PROVIDERS` table structurally).
+- A prepared base image that bakes in the pinned provider packages, replacing the per-start `npm install`.
+  The pins in `provisioning.ts` are what it would install.
 - Wire envelope `{op, req}` at the next protocol-revision bump.
 - Ask-answer encoding (keyed by question text, lossy) redesign.
 

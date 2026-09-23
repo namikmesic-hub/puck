@@ -13,6 +13,7 @@ import * as envs from './environments';
 import * as runner from './runner';
 import * as sessions from './session-registry';
 import { requireProvider } from './providers';
+import { notReadyMessage } from '../harness/lifecycle';
 
 /** turnId → routing info. `reqId` differs from `turnId` on a stale-resume
  *  retry so the two attempts can never cross-route runner messages. */
@@ -21,11 +22,11 @@ const activeTurns = new Map<string, { envId: string; reqId: string }>();
 export async function status(): Promise<HarnessStatus> {
   const agent = agents.active();
   const env = envs.activeEnv();
-  const environment = env
-    ? { id: env.id, name: env.name, status: await envs.runtimeStatus(env.id) }
-    : null;
+  // Puck's lifecycle state, not Docker liveness: a container that is still
+  // installing, or already stopping, is running per Docker but not ready.
+  const environment = env ? { id: env.id, name: env.name, ...(await envs.lifecycle(env.id)) } : null;
   return {
-    connected: environment?.status === 'running' && !!agent,
+    connected: environment?.status === 'ready' && !!agent,
     agent: agent
       ? { id: agent.id, name: agent.name, provider: agent.provider, model: agent.model }
       : null,
@@ -53,8 +54,12 @@ export async function* runTurn(
     yield* fail('No environment configured. Open Settings and create one.');
     return;
   }
-  if ((await envs.runtimeStatus(env.id)) !== 'running') {
-    yield* fail(`Environment "${env.name}" is not running. Start it from Settings.`);
+  // The chat gate: only a READY environment (bootstrapped, credentials in,
+  // runner deployed and handshaken) accepts turns. The renderer disables the
+  // composer on the same state; this is the authoritative check.
+  const lifecycle = await envs.lifecycle(env.id);
+  if (lifecycle.status !== 'ready') {
+    yield* fail(notReadyMessage(env.name, lifecycle));
     return;
   }
   if (activeTurns.has(turnId)) {

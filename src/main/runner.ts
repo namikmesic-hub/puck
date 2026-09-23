@@ -27,6 +27,23 @@ export function useExecSpawner(fn: ExecSpawner): void {
 }
 
 /**
+ * Lifecycle seam: when the exec dies mid-turn, environments can explain it
+ * (a concurrent stop/restart) so the user reads "restarting", not
+ * "disconnected". Returns null when no lifecycle operation is active.
+ */
+export type DisconnectExplainer = (envId: string) => string | null;
+let explainDisconnect: DisconnectExplainer = () => null;
+export function useDisconnectExplainer(fn: DisconnectExplainer): void {
+  explainDisconnect = fn;
+}
+
+/** Subscribers told when a runner exec ends on its own (not via detach). */
+const exitSubscribers: Array<(envId: string, code: number | null) => void> = [];
+export function onRunnerExit(cb: (envId: string, code: number | null) => void): void {
+  exitSubscribers.push(cb);
+}
+
+/**
  * Wire contract with the container runner. runner.js (which cannot import
  * host code) declares the same values as `OP`/`RV`; the sync is enforced by
  * test/unit/runner-source.test.ts.
@@ -75,6 +92,8 @@ interface RunnerProc {
   ready: Promise<void>;
   /** Protocol revision reported by the ready handshake (old runners: 1). */
   rv: number;
+  /** Exit code once the exec has closed (137 = killed, e.g. container stop). */
+  exitCode: number | null;
 }
 
 /** One NDJSON frame to the runner; frames are the whole wire protocol. */
@@ -100,22 +119,29 @@ function ensure(envId: string): RunnerProc {
     readyReject = reject;
   });
   ready.catch(() => undefined); // observed via await in turn(); avoid unhandled
-  const proc: RunnerProc = { child, routes, stderrTail: '', ready, rv: 1 };
+  const proc: RunnerProc = { child, routes, stderrTail: '', ready, rv: 1, exitCode: null };
   const readyTimer = setTimeout(() => {
     readyReject(new Error('runner did not report ready within 15s'));
   }, 15_000);
 
   // A dead exec (container gone, daemon stopped) must fail the turn, not the
   // app: without these handlers an EPIPE on stdin is a process-fatal throw.
-  const fail = (): void => {
+  let failed = false;
+  const fail = (code: number | null = null): void => {
+    if (failed) return;
+    failed = true;
+    proc.exitCode = code;
     clearTimeout(readyTimer);
-    readyReject(new Error('runner process exited'));
+    readyReject(new Error(code === null ? 'runner process exited' : `runner process exited (code ${code})`));
     for (const route of routes.values()) route(null);
     routes.clear();
     if (runners.get(envId) === proc) runners.delete(envId);
+    // An exec WE killed (detach) is not news; one that died on its own is —
+    // the environment may have stopped underneath us.
+    if (!child.killed) for (const cb of exitSubscribers) cb(envId, code);
   };
-  child.on('error', fail);
-  child.stdin?.on('error', fail);
+  child.on('error', () => fail());
+  child.stdin?.on('error', () => fail());
 
   let buf = '';
   child.stdout.on('data', (chunk) => {
@@ -141,10 +167,26 @@ function ensure(envId: string): RunnerProc {
   child.stderr.on('data', (chunk) => {
     proc.stderrTail = (proc.stderrTail + String(chunk)).slice(-8000);
   });
-  child.on('close', fail);
+  child.on('close', (code) => fail(code));
 
   runners.set(envId, proc);
   return proc;
+}
+
+/**
+ * Readiness handshake probe: opens the runner exec (or reuses a live one)
+ * and resolves once the runner reports `{ready:true}`. The exec stays cached
+ * for the first turn. Rejects with container stderr when the runner cannot
+ * start (typically MODULE_NOT_FOUND: the runner file or an SDK is missing).
+ */
+export async function probe(envId: string): Promise<{ rv: number }> {
+  const proc = ensure(envId);
+  try {
+    await proc.ready;
+  } catch (err) {
+    throw new Error(diagnose(proc, `Runner handshake failed: ${err instanceof Error ? err.message : err}`));
+  }
+  return { rv: proc.rv };
 }
 
 function diagnose(proc: RunnerProc, headline: string): string {
@@ -153,6 +195,27 @@ function diagnose(proc: RunnerProc, headline: string): string {
 }
 
 const endStats = { inputTokens: 0, outputTokens: 0, durationMs: 0 };
+
+/**
+ * Why a turn lost its runner. A lifecycle operation in progress (stop,
+ * restart, rebuild) is the answer when there is one — including the exit
+ * 137 Docker delivers when it kills the exec during a stop; only an
+ * unexplained death gets the diagnostic headline plus container stderr.
+ */
+function disconnectMessage(envId: string, proc: RunnerProc, sawMessage: boolean): string {
+  const lifecycle = explainDisconnect(envId);
+  if (lifecycle) return `${lifecycle} This turn was cancelled.`;
+  if (proc.exitCode === 137) {
+    return diagnose(
+      proc,
+      'Runner was killed (exit 137) — the container stopped or the process ran out of memory.',
+    );
+  }
+  const headline = sawMessage
+    ? 'Runner disconnected — is the environment container still running?'
+    : 'Runner did not respond within 90s — is the environment container healthy?';
+  return diagnose(proc, headline);
+}
 
 export async function* turn(
   envId: string,
@@ -210,10 +273,7 @@ export async function* turn(
       while (queue.length) {
         const msg = queue.shift();
         if (msg === null || msg === undefined) {
-          const headline = sawMessage
-            ? 'Runner disconnected — is the environment container still running?'
-            : 'Runner did not respond within 90s — is the environment container healthy?';
-          yield { kind: 'error', message: diagnose(proc, headline) };
+          yield { kind: 'error', message: disconnectMessage(envId, proc, sawMessage) };
           yield { kind: 'turn-end', stats: endStats };
           return;
         }

@@ -1,11 +1,19 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { useDockerRunner, type DockerResult } from '../../src/main/docker-client';
 import * as environments from '../../src/main/environments';
 import { providers, requireProvider } from '../../src/main/providers';
 import { account as claudeAccount } from '../../src/main/providers/claude-oauth';
+import { expectedPackages } from '../../src/main/provisioning';
+
+// A start ends with the runner handshake; no real exec here.
+vi.mock('../../src/main/runner', () => ({
+  detach: () => undefined,
+  probe: async () => ({ rv: 2 }),
+  onRunnerExit: () => undefined,
+}));
 
 // The container side of the logout fence: the credential file Puck mirrored
 // into a container must not outlive the sign-out - whether the container is
@@ -37,6 +45,11 @@ beforeAll(() => {
         : { code: 1, stdout: '', stderr: 'No such object' };
     }
     if (args[0] === 'exec' && args[2] === 'cat') return { code: 1, stdout: '', stderr: 'No such file' };
+    if (args[0] === 'exec' && args[2] === 'sh' && args[4].includes('echo "')) {
+      // The pinned-version verify script: every SDK present (auto-install is off in these envs).
+      const versions = expectedPackages(providers).map((p) => `${p.name} ${p.version}`).join('\n');
+      return { code: 0, stdout: versions, stderr: '' };
+    }
     if (isRm(args) && rmFails) return { code: 1, stdout: '', stderr: 'permission denied' };
     if (args[0] === 'cp' && args[2].endsWith(CRED)) onCredentialCopy?.();
     return { code: 0, stdout: '', stderr: '' };

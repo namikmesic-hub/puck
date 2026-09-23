@@ -200,8 +200,9 @@ export const codexProvider: Provider = {
 
   container: {
     cliBin: 'codex',
-    cliPackages: ['@openai/codex'],
-    sdkPackages: ['@openai/codex-sdk'],
+    // Pinned: verified by provisioning after install (see provisioning.ts).
+    cliPackages: [{ name: '@openai/codex', version: '0.156.1' }],
+    sdkPackages: [{ name: '@openai/codex-sdk', version: '0.156.1' }],
     forwardedEnvKeys: ['OPENAI_API_KEY', 'CODEX_API_KEY'],
     containerEnv: {},
     credential: providerCredential(oauth.account, {

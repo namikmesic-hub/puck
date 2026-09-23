@@ -8,13 +8,16 @@
  */
 
 import type { EnvironmentInfo, HarnessStatus, PuckBridge } from '../../harness/bridge';
-import { el, flashSaved, statusEl } from '../dom';
+import { el, flashSaved } from '../dom';
 import { button, errText } from '../util';
+import { renderProgress, statusChip } from '../env-progress';
 import { envOpRail } from './env-rail';
 
 export interface EnvEditorElements {
   title: HTMLElement;
   status: HTMLElement;
+  /** Stage · elapsed line (+ last output line / error) under the header. */
+  progress: HTMLElement;
   controls: HTMLElement;
   msg: HTMLElement;
   back: HTMLButtonElement;
@@ -49,6 +52,8 @@ export function initEnvEditor(ctx: EnvEditorContext) {
 
   /** Which environment the editor is showing; null once the user navigates away. */
   let detailEnvId: string | null = null;
+  /** The last lifecycle snapshot rendered in the header (the ticker re-renders it). */
+  let shownEnv: EnvironmentInfo | null = null;
   /** Working copy of the env-var map — edits stay local until Save. */
   let detailEnvVars: Record<string, string> = {};
 
@@ -88,12 +93,14 @@ export function initEnvEditor(ctx: EnvEditorContext) {
     }
   }
 
-  /** Header of the environment page: name, live status, management controls. */
+  /** Header of the environment page: name, live status + progress, management controls. */
   function renderHeader(env: EnvironmentInfo): void {
+    shownEnv = env;
     els.title.textContent = env.name;
     els.status.textContent = '';
-    els.status.appendChild(statusEl(env.status === 'running', env.status));
+    els.status.appendChild(statusChip(env.status));
     if (env.active) els.status.appendChild(el('span', 'badge-active', 'active'));
+    renderProgress(els.progress, env, Date.now());
 
     els.controls.textContent = '';
     if (!bridge) return;
@@ -186,9 +193,18 @@ export function initEnvEditor(ctx: EnvEditorContext) {
 
   return {
     open,
+    /** A lifecycle push for the open environment: header only, never the form (it may be mid-edit). */
+    update(env: EnvironmentInfo): void {
+      if (env.id === detailEnvId) renderHeader(env);
+    },
+    /** Elapsed-time tick: re-render the progress line from the last snapshot. */
+    tick(now: number): void {
+      if (shownEnv && shownEnv.id === detailEnvId) renderProgress(els.progress, shownEnv, now);
+    },
     /** The user navigated away — a lingering id must not accept a Save. */
     abandon(): void {
       detailEnvId = null;
+      shownEnv = null;
     },
     /** An env died elsewhere (list-card delete) — drop it if it's the one open. */
     forget(envId: string): void {

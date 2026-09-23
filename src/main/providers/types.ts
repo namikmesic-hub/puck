@@ -65,14 +65,26 @@ export interface ProviderCredential {
   adoptIfNewer(containerJson: string): void;
 }
 
+/**
+ * An npm package installed into containers at an exact version. Pins keep
+ * the runner and the SDK it was written against in lockstep; provisioning
+ * verifies the installed version after install and fails setup on drift.
+ * Bump a pin deliberately, together with any runner.js adaptation.
+ */
+export interface PinnedPackage {
+  name: string;
+  /** Exact version (no range). */
+  version: string;
+}
+
 /** How the provider is installed and authenticated inside containers. */
 export interface ContainerIntegration {
-  /** Binary probed with `command -v` before installing the CLI. */
+  /** CLI binary name (empty for API-key-only providers without a CLI). */
   cliBin: string;
   /** npm -g packages that provide the interactive CLI. */
-  cliPackages: string[];
+  cliPackages: PinnedPackage[];
   /** npm packages the runner agent needs under /opt/puck. */
-  sdkPackages: string[];
+  sdkPackages: PinnedPackage[];
   /** Host env vars forwarded into the container at creation. */
   forwardedEnvKeys: string[];
   /** Env baked into the container at creation (e.g. IS_SANDBOX=1). */

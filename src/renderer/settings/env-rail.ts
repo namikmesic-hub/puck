@@ -1,9 +1,11 @@
 /**
  * The one environment op rail (Select / Stop / Restart / Rebuild / Start /
  * Delete) — used by both the envs list cards and the env detail header, so
- * adding an operation is one edit. Ops run one at a time per host; whatever
- * `EnvironmentInfo[]` the bridge mutation returns flows to `onSettled`, so
- * callers can render it instead of re-probing docker with a second envList.
+ * adding an operation is one edit. Which ops appear follows the Puck
+ * lifecycle status: a `starting` environment offers Stop (which cancels the
+ * start), a `stopping` one offers nothing until it settles. Ops run one at a
+ * time per host; whatever `EnvironmentInfo[]` the bridge mutation returns
+ * flows to `onSettled`, so callers can render it instead of re-probing.
  */
 
 import type { EnvironmentInfo, HarnessStatus, PuckBridge } from '../../harness/bridge';
@@ -39,8 +41,9 @@ export function envOpRail(host: HTMLElement, env: EnvironmentInfo, ctx: EnvRailC
     }
     await ctx.onSettled(latest);
   };
-  const action = (label: string, fn: () => Promise<EnvironmentInfo[] | void>): void => {
+  const action = (label: string, fn: () => Promise<EnvironmentInfo[] | void>, title?: string): void => {
     const btn = button('btn-ghost', label);
+    if (title) btn.title = title;
     btn.addEventListener('click', (e) => {
       if (ctx.stopPropagation) e.stopPropagation();
       void runOp(btn, fn);
@@ -53,16 +56,26 @@ export function envOpRail(host: HTMLElement, env: EnvironmentInfo, ctx: EnvRailC
       ctx.applyStatus(await ctx.bridge.envSelect(env.id));
     });
   }
-  if (env.status === 'running') {
-    action('Stop', () => ctx.bridge.envStop(env.id));
-    action('Restart', () => ctx.bridge.envRestart(env.id));
-    action('Rebuild', () => ctx.bridge.envRebuild(env.id));
-  } else {
-    action('Start', () => ctx.bridge.envStart(env.id));
-    action('Rebuild', () => ctx.bridge.envRebuild(env.id));
-    const del = button('btn-ghost danger', 'Delete');
-    // armDelete stops propagation itself, so the clickable list card stays shut.
-    armDelete(del, () => runOp(del, () => ctx.onDelete(env)));
-    host.appendChild(del);
+  switch (env.status) {
+    case 'ready':
+      action('Stop', () => ctx.bridge.envStop(env.id));
+      action('Restart', () => ctx.bridge.envRestart(env.id));
+      action('Rebuild', () => ctx.bridge.envRebuild(env.id));
+      break;
+    case 'starting':
+      action('Stop', () => ctx.bridge.envStop(env.id), 'Cancel the start and stop the container');
+      break;
+    case 'stopping':
+      break; // settles on its own; the chip and progress line say so
+    case 'stopped':
+    case 'failed': {
+      action('Start', () => ctx.bridge.envStart(env.id));
+      action('Rebuild', () => ctx.bridge.envRebuild(env.id));
+      const del = button('btn-ghost danger', 'Delete');
+      // armDelete stops propagation itself, so the clickable list card stays shut.
+      armDelete(del, () => runOp(del, () => ctx.onDelete(env)));
+      host.appendChild(del);
+      break;
+    }
   }
 }

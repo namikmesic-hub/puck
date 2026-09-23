@@ -35,7 +35,14 @@ export class BrowserWindow {
   static getAllWindows(): BrowserWindow[] {
     return [];
   }
-  webContents = { on: (): void => undefined, setWindowOpenHandler: (): void => undefined };
+  webContents = {
+    on: (): void => undefined,
+    setWindowOpenHandler: (): void => undefined,
+    send: (): void => undefined,
+  };
+  isDestroyed(): boolean {
+    return false;
+  }
   loadURL(): void {
     /* never navigates in tests */
   }

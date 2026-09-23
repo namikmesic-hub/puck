@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { EnvLifecycle } from '../../src/harness/bridge';
 import type { HarnessEvent } from '../../src/harness/types';
 import type { TurnRequest } from '../../src/main/runner';
 
@@ -12,9 +13,21 @@ vi.mock('../../src/main/runner', () => ({
   interrupt: vi.fn(),
   answerAsk: vi.fn(),
 }));
+// The active environment's Puck lifecycle state — the chat gate reads this,
+// never Docker liveness. Tests flip it to exercise the gate.
+const envState = vi.hoisted(() => ({
+  lifecycle: {
+    status: 'ready',
+    stage: null,
+    detail: '',
+    startedAt: 1_000,
+    endedAt: 5_000,
+    error: null,
+  } as EnvLifecycle,
+}));
 vi.mock('../../src/main/environments', () => ({
   activeEnv: () => ({ id: 'env1', name: 'Test Env' }),
-  runtimeStatus: async () => 'running' as const,
+  lifecycle: async () => envState.lifecycle,
 }));
 const testAgent = {
   id: 'agent1',
@@ -43,6 +56,7 @@ let scripts: Array<(call: TurnCall) => HarnessEvent[]>;
 beforeEach(() => {
   calls = [];
   scripts = [];
+  envState.lifecycle = { status: 'ready', stage: null, detail: '', startedAt: 1_000, endedAt: 5_000, error: null };
   vi.mocked(runner.turn).mockImplementation(async function* (_envId, req, onSession) {
     const call = { req, onSession };
     calls.push(call);
@@ -139,5 +153,61 @@ describe('backend stale-resume retry', () => {
     expect((second[0] as { message: string }).message).toMatch(/duplicate/i);
     release();
     await first;
+  });
+});
+
+describe('backend chat gate (environment readiness)', () => {
+  it('refuses a turn while the environment is starting, naming it and the stage', async () => {
+    envState.lifecycle = {
+      status: 'starting',
+      stage: 'pulling-image',
+      detail: 'abc: Downloading',
+      startedAt: 1_000,
+      endedAt: null,
+      error: null,
+    };
+    const events = await run();
+    expect(events.map((e) => e.kind)).toEqual(['error', 'turn-end']);
+    const message = (events[0] as { message: string }).message;
+    expect(message).toContain('"Test Env"');
+    expect(message).toMatch(/starting/);
+    expect(message).toMatch(/pulling image/);
+    expect(calls).toHaveLength(0); // the runner is never asked
+  });
+
+  it('refuses a turn in a failed environment and carries the failure text', async () => {
+    envState.lifecycle = {
+      status: 'failed',
+      stage: 'installing-sdks',
+      detail: '',
+      startedAt: 1_000,
+      endedAt: 9_000,
+      error: 'npm ERR! network timeout',
+    };
+    const events = await run();
+    const message = (events[0] as { message: string }).message;
+    expect(message).toMatch(/failed while installing provider SDKs/);
+    expect(message).toContain('npm ERR! network timeout');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('a stopped environment is refused with the start hint (Docker liveness is not consulted)', async () => {
+    envState.lifecycle = { status: 'stopped', stage: null, detail: '', startedAt: null, endedAt: null, error: null };
+    const events = await run();
+    expect((events[0] as { message: string }).message).toMatch(/is stopped\. Start it from Settings/);
+  });
+
+  it('status() reports the lifecycle and connects only when ready', async () => {
+    envState.lifecycle = {
+      status: 'starting',
+      stage: 'installing-clis',
+      detail: 'npm install',
+      startedAt: 1_000,
+      endedAt: null,
+      error: null,
+    };
+    const s = await backend.status();
+    expect(s.connected).toBe(false);
+    expect(s.environment).toMatchObject({ id: 'env1', name: 'Test Env', status: 'starting', stage: 'installing-clis' });
   });
 });

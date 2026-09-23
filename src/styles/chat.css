@@ -937,6 +937,22 @@
   background: var(--red);
 }
 
+.dot-mini.busy {
+  background: var(--gold);
+  animation: lifecycle-pulse 1.2s ease-in-out infinite;
+}
+
+.dot-mini.bad {
+  background: var(--red);
+}
+
+/* The composer while the environment is not ready: sending is blocked, the
+   placeholder names the environment and stage; drafts stay editable. */
+.composer.gated .send {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .model-menu.menu-up {
   top: auto;
   bottom: 56px;

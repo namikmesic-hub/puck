@@ -16,7 +16,7 @@ describe('container runner source', () => {
         new RegExp(`['"]?${p.id}['"]?:\\s*\\{`),
       );
       for (const pkg of p.container.sdkPackages) {
-        expect(source, `runner.js does not import ${pkg}`).toContain(pkg);
+        expect(source, `runner.js does not import ${pkg.name}`).toContain(pkg.name);
       }
     }
   });

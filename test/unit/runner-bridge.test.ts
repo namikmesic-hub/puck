@@ -63,6 +63,9 @@ function req(id: string, extra: Partial<TurnRequest> = {}): TurnRequest {
 let child: FakeChild;
 let envSeq = 0;
 let envId: string;
+/** Self-inflicted runner deaths reported through onRunnerExit (never detaches). */
+const exits: Array<{ envId: string; code: number | null }> = [];
+runner.onRunnerExit((id, code) => exits.push({ envId: id, code }));
 
 /** Collects a turn's events; runs the generator to completion. */
 async function collect(
@@ -78,7 +81,9 @@ beforeEach(() => {
   vi.useFakeTimers();
   child = new FakeChild();
   envId = `env-${++envSeq}`; // fresh cached-proc slot per test
+  exits.length = 0;
   runner.useExecSpawner(() => child as unknown as ChildProcessWithoutNullStreams);
+  runner.useDisconnectExplainer(() => null);
 });
 
 afterEach(() => {
@@ -194,5 +199,73 @@ describe('runner NDJSON bridge', () => {
     child.finish('t1', { providerSessionId: 'sess-final' });
     await turn;
     expect(seen).toEqual(['sess-early', 'sess-final']);
+  });
+});
+
+describe('runner readiness probe and lifecycle-aware disconnects', () => {
+  it('probe resolves on the ready handshake, reports rv, and leaves the exec cached for the first turn', async () => {
+    const probing = runner.probe(envId);
+    child.ready();
+    await expect(probing).resolves.toEqual({ rv: runner.WIRE.rv });
+    const turn = collect(req('t1'));
+    await vi.advanceTimersByTimeAsync(0);
+    child.finish('t1');
+    await turn;
+    expect(child.sent().filter((m) => m.op === runner.WIRE.ops.turn)).toHaveLength(1); // same exec, no respawn
+  });
+
+  it('probe rejects with container stderr when the runner cannot start (e.g. MODULE_NOT_FOUND)', async () => {
+    const probing = runner.probe(envId);
+    child.stderr.write("Error: Cannot find module '/opt/puck/runner.js'\n");
+    await vi.advanceTimersByTimeAsync(0);
+    child.emit('close', 1);
+    await expect(probing).rejects.toThrow(/Runner handshake failed[\s\S]*Cannot find module/);
+  });
+
+  it('probe rejects when no handshake arrives within 15s', async () => {
+    const probing = runner.probe(envId);
+    probing.catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(15_000);
+    await expect(probing).rejects.toThrow(/did not report ready/);
+  });
+
+  it('a lifecycle operation explains the disconnect instead of the diagnostic headline', async () => {
+    runner.useDisconnectExplainer(() => 'Environment "dev" is restarting.');
+    child.ready();
+    const turn = collect(req('t1'));
+    await vi.advanceTimersByTimeAsync(0);
+    child.reply({ id: 't1', event: { kind: 'text-delta', text: 'partial' } });
+    child.emit('close', 137); // Docker kills the exec during the stop grace period
+    const events = await turn;
+    const message = (events[1] as { message: string }).message;
+    expect(message).toBe('Environment "dev" is restarting. This turn was cancelled.');
+    expect(message).not.toMatch(/disconnected|137/);
+  });
+
+  it('an unexplained exit 137 reads as killed, not as a generic disconnect', async () => {
+    child.ready();
+    const turn = collect(req('t1'));
+    await vi.advanceTimersByTimeAsync(0);
+    child.emit('close', 137);
+    const events = await turn;
+    expect((events[0] as { message: string }).message).toMatch(/killed \(exit 137\)/);
+  });
+
+  it('onRunnerExit fires for a death the host did not cause, and stays silent for detach', async () => {
+    const probing = runner.probe(envId); // opens the exec and attaches the exit handlers
+    child.ready();
+    await probing;
+    child.emit('close', 1);
+    expect(exits).toEqual([{ envId, code: 1 }]);
+
+    const other = new FakeChild();
+    const otherEnv = `env-${++envSeq}`;
+    runner.useExecSpawner(() => other as unknown as ChildProcessWithoutNullStreams);
+    void runner.probe(otherEnv).catch(() => undefined);
+    other.ready();
+    await vi.advanceTimersByTimeAsync(0);
+    runner.detach(otherEnv); // our own kill
+    other.emit('close', null);
+    expect(exits).toHaveLength(1);
   });
 });

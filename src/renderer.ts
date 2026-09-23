@@ -31,6 +31,15 @@ import {
 } from './renderer/nav';
 import { addCard, cardShell, loadingInto } from './renderer/settings/cards';
 import { envOpRail } from './renderer/settings/env-rail';
+import {
+  composerGate,
+  createLifecycleTracker,
+  heroLine,
+  pickLifecycle,
+  renderProgress,
+  statusChip,
+  statusTone,
+} from './renderer/env-progress';
 import { IpcHarness } from './harness/ipc';
 import type {
   AgentInfo,
@@ -130,23 +139,26 @@ document.addEventListener('click', (e) => {
   if (/^https?:\/\//i.test(anchor.href)) void bridge?.openExternal(anchor.href);
 });
 
-/* ---------- Harness status ---------- */
+/* ---------- Harness status + environment lifecycle ---------- */
+
+/** The active environment's lifecycle as last reported (status call or push). */
+let activeEnv: HarnessStatus['environment'] = null;
 
 function applyStatus(s: HarnessStatus): void {
-  envselName.textContent = s.environment?.name ?? 'no environment';
-  envselDot.className =
-    'dot-mini ' + (s.environment ? (s.environment.status === 'running' ? 'on' : 'off') : '');
-  stage.classList.toggle('connected', !!s.environment && s.environment.status === 'running');
+  activeEnv = s.environment;
+  if (activeEnv) tracker.seed([activeEnv]);
+  applyEnvChrome(Date.now());
+}
+
+/** Everything in the chat that reflects the active environment: selector dot, hero, composer. */
+function applyEnvChrome(now: number): void {
+  const env = activeEnv;
+  envselName.textContent = env?.name ?? 'no environment';
+  envselDot.className = 'dot-mini ' + (env ? statusTone(env.status) : '');
+  stage.classList.toggle('connected', env?.status === 'ready');
   const who = current.agentId ? current.title : 'your agent';
-  if (!agentInfos.length) {
-    heroSubtitle.textContent = 'Create an agent in Settings — every agent gets its own chat.';
-  } else if (!s.environment) {
-    heroSubtitle.textContent = 'Set up an environment in Settings, then just type.';
-  } else if (s.environment.status !== 'running') {
-    heroSubtitle.textContent = `Environment "${s.environment.name}" is stopped — start it from Settings.`;
-  } else {
-    heroSubtitle.textContent = `${who} in "${s.environment.name}" — real tool calls in a Docker sandbox.`;
-  }
+  heroSubtitle.textContent = heroLine(env, who, agentInfos.length > 0, now);
+  syncComposer();
 }
 
 async function refreshStatus(): Promise<void> {
@@ -195,7 +207,7 @@ envselBtn.addEventListener('click', async () => {
   const envs = await bridge.envList().catch(() => []);
   const items: MenuItem[] = envs.map((e) => ({
     value: e.id,
-    label: `${e.name}${e.status === 'running' ? '' : ' — stopped'}`,
+    label: `${e.name}${e.status === 'ready' ? '' : ` — ${e.status}`}`,
     active: e.active,
   }));
   items.push({ value: '__manage', label: '⚙ Manage environments…' });
@@ -545,6 +557,7 @@ const envEditor = initEnvEditor({
   els: {
     title: detailTitle,
     status: byId('detail-status'),
+    progress: byId('detail-progress'),
     controls: byId('detail-controls'),
     msg: byId('detail-msg'),
     back: byId<HTMLButtonElement>('detail-back'),
@@ -574,22 +587,28 @@ async function renderEnvs(): Promise<void> {
   renderEnvsFrom(envs);
 }
 
+/** The list as last rendered; lifecycle pushes patch it in place. */
+let lastEnvs: EnvironmentInfo[] = [];
+
 /** Renders a known list — env ops feed their returned list here instead of
  *  paying a second round of per-container docker probes. */
 function renderEnvsFrom(envs: EnvironmentInfo[]): void {
   if (!bridge) return;
+  lastEnvs = envs;
+  tracker.seed(envs);
   envCards.removeAttribute('aria-busy');
   envCards.textContent = '';
   for (const env of envs) {
     const card = cardShell({
       title: env.name,
       active: env.active,
-      headRight: statusEl(env.status === 'running', env.status),
+      headRight: statusChip(env.status),
       clickable: {
         label: `Configure environment ${env.name}`,
         onOpen: () => nav({ view: 'env-detail', env }),
       },
     });
+    card.dataset.envId = env.id;
     card.appendChild(
       el(
         'div',
@@ -597,6 +616,9 @@ function renderEnvsFrom(envs: EnvironmentInfo[]): void {
         `${env.dockerfile.trim() ? 'Dockerfile' : env.image} · ${env.workspacePath}`,
       ),
     );
+    const progress = el('div', 'env-progress card-progress');
+    renderProgress(progress, env, Date.now());
+    card.appendChild(progress);
 
     const foot = el('div', 'card-foot');
     envOpRail(foot, env, {
@@ -641,6 +663,41 @@ function renderEnvsFrom(envs: EnvironmentInfo[]): void {
     }),
   );
 }
+
+/** Refresh one card's progress line without rebuilding the grid. */
+function patchEnvCard(env: EnvironmentInfo, now: number): void {
+  const host = envCards.querySelector<HTMLElement>(`[data-env-id="${env.id}"] .card-progress`);
+  if (host) renderProgress(host, env, now);
+}
+
+// Lifecycle pushes: the same event updates the chat chrome (if it is the
+// active environment), the Settings card, and the detail header. A status
+// change re-renders the card grid (the op rail depends on it); a mere output
+// line patches the progress text in place. The tracker's ticker advances
+// elapsed times between pushes.
+const tracker = createLifecycleTracker({
+  onTick: (now) => {
+    applyEnvChrome(now);
+    for (const env of lastEnvs) patchEnvCard(env, now);
+    envEditor.tick(now);
+  },
+});
+
+bridge?.onEnvEvent((ev) => {
+  const statusChanged = tracker.apply(ev);
+  const lifecycle = pickLifecycle(ev);
+  if (activeEnv?.id === ev.envId) {
+    activeEnv = { ...activeEnv, ...lifecycle };
+    applyEnvChrome(Date.now());
+  }
+  const idx = lastEnvs.findIndex((e) => e.id === ev.envId);
+  if (idx === -1) return;
+  const merged = { ...lastEnvs[idx], ...lifecycle };
+  lastEnvs[idx] = merged;
+  if (statusChanged) renderEnvsFrom(lastEnvs);
+  else patchEnvCard(merged, Date.now());
+  envEditor.update(merged);
+});
 
 /* ---------- Sessions ---------- */
 
@@ -787,21 +844,24 @@ function openSession(id: number): void {
 
 /* ---------- Turn loop ---------- */
 
-/** Reflect the CURRENT session's turn state on the send/stop button. */
+/** Reflect the CURRENT session's turn state and the environment gate on the composer. */
 function syncComposer(): void {
   const isChild = current.parentSessionId !== undefined;
+  const gate = composerGate(activeEnv, current.agentId ? current.title : null);
   prompt.disabled = isChild;
   prompt.placeholder = isChild
     ? 'Sub-agent conversation — watch it work, or reply via the main chat'
-    : current.agentId
-      ? `Message ${current.title}`
-      : 'Create an agent in Settings to start chatting';
-  send.disabled = isChild;
+    : gate.placeholder;
   const running = current.running;
+  // Not ready (starting, stopping, failed, stopped, or no environment): the
+  // draft stays editable, sending is blocked and the button says why.
+  const gated = !isChild && !running && !gate.ready;
+  send.disabled = isChild || gated;
+  composer.classList.toggle('gated', gated);
   send.classList.toggle('stop', running && !isChild);
   send.classList.remove('stopping');
   send.innerHTML = running && !isChild ? STOP_ICON : SEND_ICON;
-  send.title = running && !isChild ? 'Stop this turn' : 'Send · Enter';
+  send.title = running && !isChild ? 'Stop this turn' : gated ? gate.reason : 'Send · Enter';
 }
 
 async function submit(text: string): Promise<void> {
@@ -902,6 +962,11 @@ composer.addEventListener('submit', (e) => {
   if (current.running) return; // keep the draft while this session's turn is in flight
   const text = prompt.value;
   if (!text.trim() || !harness) return; // validate before destroying the draft
+  const gate = composerGate(activeEnv, current.agentId ? current.title : null);
+  if (!gate.ready) {
+    if (gate.reason) showToast(gate.reason); // e.g. Enter while the environment is still starting
+    return;
+  }
   prompt.value = '';
   autosize();
   void submit(text);
