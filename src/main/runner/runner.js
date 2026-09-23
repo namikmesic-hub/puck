@@ -395,6 +395,113 @@ function cxToolCard(item) {
   }
 }
 
+// Codex sub-agents. The exec interface reports the parent's collab tool
+// calls (spawn_agent, send_input, wait, close_agent) with the child thread
+// id and its last known status — and nothing from the child's own thread.
+// Each spawn becomes a sub-agent card whose chat carries that lifecycle
+// only. Child thread ids are stable across turns, so the map outlives the
+// turn: a later turn's wait/close still settles the original card. It does
+// not outlive the runner process — after a restart, collab items for
+// children this runner never saw spawn fall back to the raw card.
+const cxChildren = new Map(); // child thread id -> { toolId, ended }
+const CX_COLLAB_TOOLS = new Set(['spawn_agent', 'send_input', 'wait', 'close_agent']);
+// Terminal child statuses -> whether the card settles as ok. Anything else
+// (pending_init, running) leaves the card running.
+const CX_AGENT_DONE = { completed: true, shutdown: true, errored: false, interrupted: false, not_found: false };
+
+function cxPrompt(item) {
+  return typeof item.prompt === 'string' ? item.prompt : '';
+}
+
+function cxAgentSummary(item) {
+  const head = cxPrompt(item).split('\n')[0].trim().slice(0, 80) || 'sub-agent';
+  const model = typeof item.model === 'string' ? item.model : '';
+  return head + (model ? ' - ' + model : '');
+}
+
+/** One child's state as "completed" or "errored - <message>". */
+function cxAgentStatus(state) {
+  const status = state && typeof state.status === 'string' ? state.status : '';
+  const message = state && typeof state.message === 'string' ? state.message.trim() : '';
+  return status + (message ? ' - ' + message : '');
+}
+
+/**
+ * Translate one collab item event into sub-agent card events. Returns true
+ * when handled; false hands the item to the raw card path (an unknown collab
+ * tool, or a send/wait/close for a child this runner never saw spawn).
+ */
+function cxCollab(ev, ctx, openTools) {
+  const item = ev.item;
+  if (item.type !== 'collab_tool_call' || !item.id || !CX_COLLAB_TOOLS.has(item.tool)) return false;
+  const completed = ev.type === 'item.completed';
+  const receivers = Array.isArray(item.receiver_thread_ids) ? item.receiver_thread_ids.map(String) : [];
+  const states = item.agents_states && typeof item.agents_states === 'object' ? item.agents_states : {};
+  function say(toolId, text) {
+    ctx.emit({ kind: 'text-delta', text: text + '\n\n', parentId: toolId });
+  }
+
+  if (item.tool === 'spawn_agent') {
+    ctx.thinkingOff();
+    if (!openTools.has(item.id)) {
+      openTools.add(item.id);
+      ctx.emit({
+        kind: 'tool-start',
+        toolId: item.id,
+        tool: 'Agent',
+        summary: cxAgentSummary(item),
+        input: cxPrompt(item).slice(0, 4000),
+        agent: true,
+      });
+    }
+    if (!completed) return true;
+    openTools.delete(item.id);
+    const child = receivers[0];
+    if (item.status === 'failed' || !child) {
+      const detail = cxAgentStatus(child ? states[child] : null);
+      ctx.emit({
+        kind: 'tool-end',
+        toolId: item.id,
+        ok: false,
+        output: 'Codex could not start this sub-agent' + (detail ? ': ' + detail : '.'),
+      });
+      return true;
+    }
+    cxChildren.set(child, { toolId: item.id, ended: false });
+    say(item.id, 'Started as Codex thread `' + child + '` (' + (cxAgentStatus(states[child]) || 'running') + ').');
+    return true;
+  }
+
+  // send_input / wait / close_agent address children by thread id. Every
+  // receiver must be a known child — otherwise the whole item is a raw card,
+  // and a raw card already opened at item.started must also close as one.
+  if (openTools.has(item.id)) return false;
+  const children = receivers.map(function (thread) { return cxChildren.get(thread); });
+  if (!receivers.length || children.some(function (c) { return !c; })) return false;
+  if (!completed) return true; // the outcome arrives with the completion
+
+  ctx.thinkingOff();
+  receivers.forEach(function (thread, i) {
+    const child = children[i];
+    if (item.tool === 'send_input') {
+      say(child.toolId, 'Follow-up input from the parent agent:\n\n> ' + cxPrompt(item).replace(/\n/g, '\n> '));
+      return;
+    }
+    const state = states[thread] || {};
+    const ok = CX_AGENT_DONE[state.status];
+    if (ok === undefined) {
+      if (state.status) say(child.toolId, 'Status: ' + cxAgentStatus(state) + '.');
+      else if (item.status === 'failed') say(child.toolId, 'Codex reported that ' + item.tool + ' failed.');
+      return;
+    }
+    if (child.ended) return; // settled by an earlier wait/close
+    child.ended = true;
+    say(child.toolId, 'Finished: ' + cxAgentStatus(state) + '.');
+    ctx.emit({ kind: 'tool-end', toolId: child.toolId, ok: ok, output: cxAgentStatus(state) });
+  });
+  return true;
+}
+
 async function runCodex(req, sdk, ctx) {
   const started = Date.now();
   const config = { sandbox_mode: 'danger-full-access', approval_policy: 'never' };
@@ -421,6 +528,7 @@ async function runCodex(req, sdk, ctx) {
         if (ev.thread_id) ctx.session(ev.thread_id);
       } else if (ev.type === 'item.started' && ev.item) {
         if (ev.item.type === 'reasoning') ctx.thinkingOn();
+        if (cxCollab(ev, ctx, openTools)) continue; // sub-agent lifecycle -> nested card
         const card = cxToolCard(ev.item);
         if (card && ev.item.id) {
           ctx.thinkingOff();
@@ -428,6 +536,7 @@ async function runCodex(req, sdk, ctx) {
           ctx.emit({ kind: 'tool-start', toolId: ev.item.id, tool: card.tool, summary: card.summary, input: card.input });
         }
       } else if (ev.type === 'item.completed' && ev.item) {
+        if (cxCollab(ev, ctx, openTools)) continue;
         const item = ev.item;
         if (item.type === 'agent_message' && item.text) {
           ctx.thinkingOff();
@@ -473,32 +582,42 @@ async function runCodex(req, sdk, ctx) {
 
 // ---------- Dispatch ----------
 
-const rl = readline.createInterface({ input: process.stdin });
-rl.on('line', function (line) {
-  let req;
-  try { req = JSON.parse(line); } catch (err) { return; }
-  if (req.op === OP.interrupt) {
-    const fn = active.get(req.id);
-    if (fn) fn();
-  } else if (req.op === OP.answer) {
-    const resolve = pendingAsks.get(req.askId);
-    if (resolve) resolve(req.answers || null);
-  } else if (req.op === OP.turn) {
-    runTurn(req)
-      .catch(function (err) {
-        // Failures before/around the turn body (unknown provider, SDK import)
-        // must still terminate the stream: turn-end is the protocol's only
-        // terminal event, and the host UI waits for it.
-        emit(req.id, { kind: 'error', message: errText(err) });
-        emit(req.id, { kind: 'turn-end', stats: { inputTokens: 0, outputTokens: 0, durationMs: 0 } });
-        send({ id: req.id, done: true, providerSessionId: null });
-      })
-      .then(function () {
-        active.delete(req.id);
-        asksByReq.delete(req.id);
-      });
-  }
-});
-rl.on('close', function () { process.exit(0); });
+if (require.main === module) {
+  startDispatch();
+} else {
+  // Loaded as a module (unit tests): expose the provider bodies and leave
+  // stdio alone — no ready handshake, no stdin reader.
+  module.exports = { PROVIDERS, runClaude, runCodex, cxToolCard, cxCollab };
+}
 
-send({ ready: true, rv: RV });
+function startDispatch() {
+  const rl = readline.createInterface({ input: process.stdin });
+  rl.on('line', function (line) {
+    let req;
+    try { req = JSON.parse(line); } catch (err) { return; }
+    if (req.op === OP.interrupt) {
+      const fn = active.get(req.id);
+      if (fn) fn();
+    } else if (req.op === OP.answer) {
+      const resolve = pendingAsks.get(req.askId);
+      if (resolve) resolve(req.answers || null);
+    } else if (req.op === OP.turn) {
+      runTurn(req)
+        .catch(function (err) {
+          // Failures before/around the turn body (unknown provider, SDK import)
+          // must still terminate the stream: turn-end is the protocol's only
+          // terminal event, and the host UI waits for it.
+          emit(req.id, { kind: 'error', message: errText(err) });
+          emit(req.id, { kind: 'turn-end', stats: { inputTokens: 0, outputTokens: 0, durationMs: 0 } });
+          send({ id: req.id, done: true, providerSessionId: null });
+        })
+        .then(function () {
+          active.delete(req.id);
+          asksByReq.delete(req.id);
+        });
+    }
+  });
+  rl.on('close', function () { process.exit(0); });
+
+  send({ ready: true, rv: RV });
+}

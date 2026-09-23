@@ -1,0 +1,198 @@
+[
+  {
+    "type": "thread.started",
+    "thread_id": "thread-parent"
+  },
+  {
+    "type": "turn.started"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "id": "item_0",
+      "type": "collab_tool_call",
+      "tool": "spawn_agent",
+      "sender_thread_id": "thread-parent",
+      "receiver_thread_ids": [],
+      "prompt": "draft a plan",
+      "agents_states": {},
+      "status": "in_progress"
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "id": "item_0",
+      "type": "collab_tool_call",
+      "tool": "spawn_agent",
+      "sender_thread_id": "thread-parent",
+      "receiver_thread_ids": [
+        "thread-child"
+      ],
+      "prompt": "draft a plan",
+      "agents_states": {
+        "thread-child": {
+          "status": "running",
+          "message": null
+        }
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "id": "item_1",
+      "type": "collab_tool_call",
+      "tool": "send_input",
+      "sender_thread_id": "thread-parent",
+      "receiver_thread_ids": [
+        "thread-child"
+      ],
+      "prompt": "keep it under one page",
+      "agents_states": {},
+      "status": "in_progress"
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "id": "item_1",
+      "type": "collab_tool_call",
+      "tool": "send_input",
+      "sender_thread_id": "thread-parent",
+      "receiver_thread_ids": [
+        "thread-child"
+      ],
+      "prompt": "keep it under one page",
+      "agents_states": {
+        "thread-child": {
+          "status": "running",
+          "message": null
+        }
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "id": "item_2",
+      "type": "collab_tool_call",
+      "tool": "wait",
+      "sender_thread_id": "thread-parent",
+      "receiver_thread_ids": [
+        "thread-child"
+      ],
+      "prompt": null,
+      "agents_states": {},
+      "status": "in_progress"
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "id": "item_2",
+      "type": "collab_tool_call",
+      "tool": "wait",
+      "sender_thread_id": "thread-parent",
+      "receiver_thread_ids": [
+        "thread-child"
+      ],
+      "prompt": null,
+      "agents_states": {
+        "thread-child": {
+          "status": "running",
+          "message": null
+        }
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "id": "item_3",
+      "type": "collab_tool_call",
+      "tool": "wait",
+      "sender_thread_id": "thread-parent",
+      "receiver_thread_ids": [
+        "thread-child"
+      ],
+      "prompt": null,
+      "agents_states": {},
+      "status": "in_progress"
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "id": "item_3",
+      "type": "collab_tool_call",
+      "tool": "wait",
+      "sender_thread_id": "thread-parent",
+      "receiver_thread_ids": [
+        "thread-child"
+      ],
+      "prompt": null,
+      "agents_states": {
+        "thread-child": {
+          "status": "completed",
+          "message": "Plan drafted in PLAN.md"
+        }
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "id": "item_4",
+      "type": "collab_tool_call",
+      "tool": "close_agent",
+      "sender_thread_id": "thread-parent",
+      "receiver_thread_ids": [
+        "thread-child"
+      ],
+      "prompt": null,
+      "agents_states": {},
+      "status": "in_progress"
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "id": "item_4",
+      "type": "collab_tool_call",
+      "tool": "close_agent",
+      "sender_thread_id": "thread-parent",
+      "receiver_thread_ids": [
+        "thread-child"
+      ],
+      "prompt": null,
+      "agents_states": {
+        "thread-child": {
+          "status": "shutdown",
+          "message": null
+        }
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "id": "item_5",
+      "type": "agent_message",
+      "text": "The plan is in PLAN.md."
+    }
+  },
+  {
+    "type": "turn.completed",
+    "usage": {
+      "input_tokens": 1200,
+      "cached_input_tokens": 300,
+      "output_tokens": 80
+    }
+  }
+]

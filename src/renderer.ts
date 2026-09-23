@@ -37,6 +37,7 @@ import type {
   ConversationEntry,
   EnvironmentInfo,
   HarnessStatus,
+  ProviderCapabilities,
   ProviderInfo,
   PuckBridge,
 } from './harness/bridge';
@@ -662,6 +663,15 @@ const conversationFor = store.conversationFor;
 const persistConversation = store.persist;
 const schedulePersist = store.schedulePersist;
 
+/** A session's provider capabilities; sub-agent chats resolve through their root conversation. */
+function capabilitiesOf(session: Session): ProviderCapabilities | undefined {
+  let root: Session | undefined = session;
+  while (root?.parentSessionId !== undefined) root = store.findSession(root.parentSessionId);
+  const agentId = root?.agentId;
+  const info = agentId ? agentInfos.find((a) => a.id === agentId) : undefined;
+  return info ? providersById.get(info.provider)?.capabilities : undefined;
+}
+
 const chatView = initChatView({
   userName: USER_NAME,
   scrollChat,
@@ -673,6 +683,7 @@ const chatView = initChatView({
   isCurrent: (session) => session === current,
   openSession,
   spawnChild: store.spawnChild,
+  capabilities: capabilitiesOf,
   pruneChildren: store.dropChildren,
   overlay: {
     body: byId('turn-full-body'),

@@ -9,7 +9,7 @@
  * never touches renderer globals, which is what makes it jsdom-testable.
  */
 
-import type { ConversationEntry } from '../harness/bridge';
+import type { ConversationEntry, ProviderCapabilities } from '../harness/bridge';
 import type { AskQuestion, HarnessEvent, TurnStats } from '../harness/types';
 import { askCard, askReplayCard, setAskAnswered } from './ask-card';
 import { el } from './dom';
@@ -54,6 +54,8 @@ export interface ChatViewContext {
   openSession(id: number): void;
   /** Create a sub-agent chat session rooted under `parent` (session-domain). */
   spawnChild(parent: Session): Session;
+  /** Capabilities of the provider behind `session` (undefined = unknown). */
+  capabilities(session: Session): ProviderCapabilities | undefined;
   /** Drop `session`'s child chats (full-log rebuild re-creates them). */
   pruneChildren(session: Session): void;
   /** Full-screen turn overlay chrome. */
@@ -68,6 +70,25 @@ export interface ChatViewContext {
 
 /** Long histories replay only their tail; the rest loads on demand. */
 const REPLAY_WINDOW = 150;
+
+/**
+ * Shown at the top of a sub-agent chat when the provider reports only the
+ * child's lifecycle (Codex over exec), so an empty transcript is not read
+ * as a stalled agent.
+ */
+function lifecycleNote(): HTMLElement {
+  const item = el('li', 'thread-note');
+  item.append(
+    el('span', 'thread-note-title', 'Lifecycle only'),
+    el(
+      'span',
+      'thread-note-text',
+      "This provider does not deliver the sub-agent's own transcript. " +
+        'This chat shows when it started, the follow-up input it received, and its final status.',
+    ),
+  );
+  return item;
+}
 
 function sameDay(a: number, b: number): boolean {
   const x = new Date(a);
@@ -432,6 +453,8 @@ export function initChatView(ctx: ChatViewContext) {
           const child = ctx.spawnChild(session);
           addUserMessage(child, input || summary, session.title, ts); // the parent agent authored the task
           child.title = summary;
+          const lifecycleOnly = ctx.capabilities(session)?.subAgentTranscript === false;
+          if (lifecycleOnly) child.thread.appendChild(lifecycleNote());
           const thread: AgentThread = {
             child,
             childTurn: addAssistantTurn(child, turnId),
@@ -445,7 +468,7 @@ export function initChatView(ctx: ChatViewContext) {
             el('span', 'agent-chip', 'Sub-agent'),
             el('span', 'agent-link-title', summary),
             el('span', 'tool-stamp', fmtClock(at)),
-            el('span', 'agent-link-open', 'Open chat →'),
+            el('span', 'agent-link-open', lifecycleOnly ? 'Open status →' : 'Open chat →'),
           );
           link.addEventListener('click', () => ctx.openSession(child.id));
           workAppend(link, `Sub-agent · ${summary}`);

@@ -181,7 +181,11 @@ export const codexProvider: Provider = {
   compileSettings: (settings) => compileGeneric(CODEX_OPTIONS, settings),
   capabilities: {
     supportsAsk: false,
-    subAgents: false,
+    // codex exec reports the parent's collab tool calls (spawn_agent,
+    // send_input, wait, close_agent) with the child thread id and status,
+    // but filters out the child thread itself — cards, no transcript.
+    subAgents: true,
+    subAgentTranscript: false,
     streamsTokens: false,
     reportsCost: false,
   },
