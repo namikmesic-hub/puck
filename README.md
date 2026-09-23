@@ -19,8 +19,9 @@ sidebar — while every turn executes inside a Docker container you configure.
   `docker exec` stdio. The container is the safety boundary: agents run with
   full tool access inside it, and nothing from the host is writable.
 - **Providers** implement one interface (`src/main/providers/`): descriptor
-  metadata, OAuth (sign-in windows in-app; tokens encrypted via the OS
-  keychain), and container integration (packages, credential mirroring,
+  metadata, OAuth (sign-in in the system browser with a loopback callback,
+  RFC 8252 style; tokens encrypted via the OS keychain), and container
+  integration (packages, credential mirroring,
   environment). Adding a provider is one descriptor module, one registry
   entry, and one entry in the container runner's `PROVIDERS` table.
 
@@ -43,8 +44,9 @@ npm start
 
 Then, in the app:
 
-1. **Settings → Providers** — connect Claude and/or ChatGPT (OAuth completes
-   in an app window; no code pasting).
+1. **Settings → Providers** - connect Claude and/or ChatGPT. The sign-in
+   opens in your default browser, where your existing sessions live, and
+   completes on its own when the browser is redirected back to Puck.
 2. **Settings → Environments** — create an environment (base image or
    Dockerfile) and start it. First start installs the CLIs/SDKs.
 3. Pick an agent in the sidebar and say hello.

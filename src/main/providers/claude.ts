@@ -187,6 +187,8 @@ export const claudeProvider: Provider = {
 
   auth: providerAuth(oauth.account, {
     start: oauth.startLogin,
+    cancel: oauth.cancelLogin,
+    pending: oauth.loginPending,
     signInHint: 'Not connected — sign in with your Claude account',
     connectedDetail: (tokens) =>
       `Connected — token refreshes automatically (expires ${new Date(tokens.expiresAt).toLocaleString()})`,

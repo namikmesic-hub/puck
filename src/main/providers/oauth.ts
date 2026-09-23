@@ -5,13 +5,12 @@
  * the encrypted token store, login-callback fan-in, refresh-before-use,
  * adopting fresher container-side credentials, and the freshness comparison
  * used when mirroring credential files into containers. The per-provider
- * modules keep only what genuinely differs: the authorize URL, the callback
- * transport (window-redirect intercept vs loopback server), the token
- * exchange, and the credential-file serialization.
+ * modules keep only what genuinely differs: the authorize URL, the loopback
+ * callback shape (port and path), the token exchange, and the
+ * credential-file serialization.
  */
 
 import * as crypto from 'node:crypto';
-import { clearAuthSession } from '../authwindow';
 import { deleteSecret, loadSecret, saveSecret } from '../secrets';
 import type { ProviderAuth, ProviderCredential } from './types';
 
@@ -149,33 +148,42 @@ export function createOAuthAccount<T>(cfg: OAuthAccountConfig<T>): OAuthAccount<
 
 /**
  * The Provider `auth` surface over a shared account: status text, login
- * start, logout (which also drops the sign-in window's cookies so the next
- * login prompts again). Providers supply only what differs.
+ * start/cancel, logout (which also aborts a pending login and clears only
+ * Puck's own stored tokens - the browser session is the user's). Providers
+ * supply only what differs.
  */
 export function providerAuth<T>(
   account: OAuthAccount<T>,
   cfg: {
     start(): Promise<string> | string;
+    /** Abort a login in progress; must be a no-op when none is pending. */
+    cancel(): void;
+    /** True while a login waits for its browser callback. */
+    pending(): boolean;
     /** Status detail while logged out, e.g. which account to sign in with. */
     signInHint: string;
     connectedDetail(tokens: T): string;
-    beforeLogout?(): void;
   },
 ): ProviderAuth {
   return {
     status: () => {
       const tokens = account.load();
+      const pending = cfg.pending();
       if (!tokens) {
         const err = account.lastError();
-        return { connected: false, detail: err ? `Sign-in failed: ${err}` : cfg.signInHint };
+        return {
+          connected: false,
+          pending,
+          detail: err ? `Sign-in failed: ${err}` : cfg.signInHint,
+        };
       }
-      return { connected: true, detail: cfg.connectedDetail(tokens) };
+      return { connected: true, pending, detail: cfg.connectedDetail(tokens) };
     },
     start: async () => cfg.start(),
+    cancel: () => cfg.cancel(),
     logout: () => {
-      cfg.beforeLogout?.();
+      cfg.cancel();
       account.logout();
-      clearAuthSession();
     },
     setOnLogin: (cb) => account.setOnLogin(cb),
   };

@@ -13,17 +13,21 @@
  *    reach into the embedded runner string)
  */
 
-import type { ProviderCapabilities } from '../../harness/bridge';
+import type { ProviderAuthInfo, ProviderCapabilities } from '../../harness/bridge';
 import type { ProviderOption, SettingsMap } from '../../harness/options';
 
 /** Login + token lifecycle for one provider account. */
 export interface ProviderAuth {
-  status(): { connected: boolean; detail: string };
+  status(): ProviderAuthInfo;
   /**
-   * Opens the sign-in window; resolves with the authorize URL. The login
-   * itself completes asynchronously (window intercept / loopback server).
+   * Opens the authorize page in the system browser; resolves with the
+   * authorize URL. The login itself completes asynchronously when the
+   * browser is redirected to the provider's loopback listener.
    */
   start(): Promise<string>;
+  /** Abort a pending login (no-op when none is pending). */
+  cancel(): void;
+  /** Drop Puck's stored tokens (and abort a pending login). */
   logout(): void;
   /** Invoked whenever a login lands (host pushes creds into running envs). */
   setOnLogin(cb: () => void): void;

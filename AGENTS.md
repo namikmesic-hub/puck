@@ -52,6 +52,13 @@ Lint is at **zero problems** — keep it there. CI runs these plus
   override outlives the script and breaks the real window's layout; use
   `Emulation.setDeviceMetricsOverride` inside try/finally with
   `clearDeviceMetricsOverride` instead.
+- **Provider logins** run in the system browser (RFC 8252): the authorize
+  URL goes through `shell.openExternal` and the redirect lands on the shared
+  loopback listener `src/main/providers/loopback.ts` (127.0.0.1 only, one
+  request, state check, timeout). Claude binds an ephemeral port
+  (`http://localhost:<port>/callback`, the shape Claude Code registers);
+  Codex uses its registered fixed port 1455. There is no embedded sign-in
+  window or cookie partition - logout only clears Puck's own token store.
 - **colima** does not share `$HOME` with containers — credential files reach
   containers via `docker cp` only; host dirs are deliberately not mounted
   (sandbox escape via CLI hook files).
@@ -138,3 +145,10 @@ Lint is at **zero problems** — keep it there. CI runs these plus
   `PROVIDERS` table structurally).
 - Wire envelope `{op, req}` at the next protocol-revision bump.
 - Ask-answer encoding (keyed by question text — lossy) redesign.
+
+## Maintaining this file
+
+Keep this file for knowledge useful to almost every future agent session in this project.
+Do not repeat what the codebase already shows; point to the authoritative file or command instead.
+Prefer rewriting or pruning existing entries over appending new ones.
+When updating this file, preserve this bar for all agents and keep entries concise.

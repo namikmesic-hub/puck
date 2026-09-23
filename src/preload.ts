@@ -12,6 +12,7 @@ const bridge: PuckBridge = {
   agentDelete: (id) => ipcRenderer.invoke(CHANNELS.agentDelete, id),
   agentSelect: (id) => ipcRenderer.invoke(CHANNELS.agentSelect, id),
   providerAuthStart: (id) => ipcRenderer.invoke(CHANNELS.providerAuthStart, id),
+  providerAuthCancel: (id) => ipcRenderer.invoke(CHANNELS.providerAuthCancel, id),
   providerAuthLogout: (id) => ipcRenderer.invoke(CHANNELS.providerAuthLogout, id),
 
   envList: () => ipcRenderer.invoke(CHANNELS.envList),
