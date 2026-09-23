@@ -72,6 +72,8 @@ export interface EnvironmentInfo extends EnvironmentConfig {
 export interface ProviderAuthInfo {
   connected: boolean;
   detail: string;
+  /** A login is in progress in the system browser (waiting for its callback). */
+  pending: boolean;
 }
 
 /** What a provider can do — lets the frontend adapt without id checks. */
@@ -139,8 +141,12 @@ export interface PuckBridge {
   providers(): Promise<ProviderInfo[]>;
   /** Open an http(s) link in the system browser (chat links never navigate the app). */
   openExternal(url: string): Promise<void>;
-  /** Begins a provider login (sign-in window opens); returns the authorize URL. */
+  /** Begins a provider login (authorize page opens in the system browser);
+   *  returns the authorize URL. The login lands asynchronously - poll
+   *  `providers()` for `auth.connected`. */
   providerAuthStart(id: string): Promise<{ url: string }>;
+  /** Aborts a pending login; no-op when none is pending. */
+  providerAuthCancel(id: string): Promise<void>;
   providerAuthLogout(id: string): Promise<void>;
 
   agentList(): Promise<AgentInfo[]>;

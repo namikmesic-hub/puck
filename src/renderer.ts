@@ -322,14 +322,24 @@ heroCta.addEventListener('click', () => nav({ view: 'settings', section: 'envs' 
 
 /* ---------- Providers view ---------- */
 
-let waitingAuthProvider: string | null = null;
+// A login completes in the system browser; main reports `auth.pending` until
+// its loopback callback lands, fails, or times out - the view polls that.
 let authPoll: ReturnType<typeof setInterval> | null = null;
-let authPollStarted = 0;
 
 function stopAuthPoll(): void {
-  waitingAuthProvider = null;
   if (authPoll) clearInterval(authPoll);
   authPoll = null;
+}
+
+function pollAuthUntilSettled(providerId: string): void {
+  stopAuthPoll();
+  authPoll = setInterval(async () => {
+    const latest = await loadProviders();
+    if (!latest.find((p) => p.id === providerId)?.auth.pending) {
+      stopAuthPoll();
+      await renderProviders();
+    }
+  }, 2000);
 }
 
 /* ---------- Agents (settings section + detail page) ---------- */
@@ -484,18 +494,18 @@ async function renderProviders(): Promise<void> {
       title: info.label,
       headRight: statusEl(info.auth.connected, info.auth.connected ? 'connected' : 'offline'),
     });
+    const waiting = info.auth.pending && !info.auth.connected;
     card.appendChild(
       el(
         'div',
         'card-sub',
-        waitingAuthProvider === info.id && !info.auth.connected
-          ? 'complete the sign-in in the window that just opened…'
-          : info.auth.detail,
+        waiting ? 'waiting for the sign-in in your browser… come back here when done' : info.auth.detail,
       ),
     );
+    if (waiting && !authPoll) pollAuthUntilSettled(info.id); // e.g. settings reopened mid-login
 
     const foot = el('div', 'card-foot');
-    const btn = button('btn-ghost', info.auth.connected ? 'Disconnect' : 'Connect');
+    const btn = button('btn-ghost', info.auth.connected ? 'Disconnect' : waiting ? 'Cancel' : 'Connect');
     btn.addEventListener('click', async () => {
       btn.disabled = true;
       providerMsg.textContent = '';
@@ -503,25 +513,12 @@ async function renderProviders(): Promise<void> {
         if (info.auth.connected) {
           stopAuthPoll();
           await bridge.providerAuthLogout(info.id);
-        } else {
+        } else if (waiting) {
           stopAuthPoll();
+          await bridge.providerAuthCancel(info.id);
+        } else {
           await bridge.providerAuthStart(info.id);
-          waitingAuthProvider = info.id;
-          authPollStarted = Date.now();
-          // The login completes in the app's sign-in window — poll until it
-          // lands, giving up after 3 minutes if the user abandoned it.
-          authPoll = setInterval(async () => {
-            if (Date.now() - authPollStarted > 180_000) {
-              stopAuthPoll();
-              await renderProviders();
-              return;
-            }
-            const latest = await loadProviders();
-            if (latest.find((p) => p.id === info.id)?.auth.connected) {
-              stopAuthPoll();
-              await renderProviders();
-            }
-          }, 2000);
+          pollAuthUntilSettled(info.id);
         }
       } catch (err) {
         providerMsg.textContent = errText(err);

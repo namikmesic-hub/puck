@@ -1,21 +1,23 @@
 /**
  * Codex account OAuth — the provider-specific half.
  *
- * Reproduces `codex login`: Authorization Code + PKCE against auth.openai.com
- * with a local callback server on 127.0.0.1:1455 — so the login completes
- * automatically, no code pasting. Everything generic (storage, refresh
- * policy, container-credential adoption and freshness) lives in the shared
- * account (oauth.ts).
+ * Reproduces `codex login`: Authorization Code + PKCE against auth.openai.com,
+ * authorize page in the system browser, redirect received on the Codex
+ * client's registered loopback callback 127.0.0.1:1455 - so the login
+ * completes automatically, no code pasting. Everything generic (storage,
+ * refresh policy, container-credential adoption and freshness) lives in the
+ * shared account (oauth.ts); the listener lives in loopback.ts.
  */
 
-import * as http from 'node:http';
-import { closeAuthWindow, openAuthWindow } from '../authwindow';
+import { shell } from 'electron';
+import { LoginCancelledError, startLoopback, type LoopbackListener } from './loopback';
 import { createOAuthAccount, pkce, randomState } from './oauth';
 
 const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'; // Codex CLI's public OAuth client
 const ISSUER = 'https://auth.openai.com';
 const PORT = 1455; // registered callback port of the Codex client
-const REDIRECT_URI = `http://localhost:${PORT}/auth/callback`;
+const CALLBACK_PATH = '/auth/callback';
+const REDIRECT_URI = `http://localhost:${PORT}${CALLBACK_PATH}`;
 const SCOPE = 'openid profile email offline_access api.connectors.read api.connectors.invoke';
 
 /** Refresh well before OpenAI's refresh-token idle expiry; the in-container
@@ -82,11 +84,17 @@ export const account = createOAuthAccount<CodexTokens>({
   },
 });
 
-let server: http.Server | null = null;
+let pending: LoopbackListener | null = null;
 
-export function closeLoginServer(): void {
-  server?.close();
-  server = null;
+/** True while a login waits for the browser to hit the loopback callback. */
+export function loginPending(): boolean {
+  return pending !== null;
+}
+
+/** Abort a login in progress (Cancel button, logout, quit). No-op otherwise. */
+export function cancelLogin(): void {
+  pending?.cancel();
+  pending = null;
 }
 
 function accountIdFromIdToken(idToken: string): string {
@@ -133,12 +141,12 @@ async function exchangeCode(code: string, verifier: string): Promise<void> {
 }
 
 /**
- * Starts the callback server and opens the browser. Resolves with the
- * authorize URL; the login itself completes asynchronously when the browser
- * redirects to the local callback.
+ * Starts the loopback listener on the registered port, opens the authorize
+ * page in the system browser and resolves with the authorize URL. The login
+ * itself completes asynchronously when the browser is redirected back.
  */
-export function startLogin(): Promise<string> {
-  closeLoginServer();
+export async function startLogin(): Promise<string> {
+  cancelLogin(); // a new attempt supersedes any pending one
   const { verifier, challenge } = pkce(64);
   const state = randomState();
   const url =
@@ -156,49 +164,28 @@ export function startLogin(): Promise<string> {
       originator: 'codex_cli_rs',
     }).toString();
 
-  return new Promise((resolve, reject) => {
-    server = http.createServer(async (req, res) => {
-      const reqUrl = new URL(req.url ?? '/', `http://localhost:${PORT}`);
-      if (reqUrl.pathname !== '/auth/callback') {
-        res.writeHead(404).end();
-        return;
-      }
-      if (reqUrl.searchParams.get('state') !== state) {
-        res.writeHead(400).end('State mismatch - restart the login from Puck.');
-        return;
-      }
-      const code = reqUrl.searchParams.get('code');
-      if (!code) {
-        res.writeHead(400).end('Missing authorization code.');
-        return;
-      }
-      try {
-        await exchangeCode(code, verifier);
-        res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end('<h2>Codex is connected to Puck.</h2>');
-        closeAuthWindow();
-        account.notifyLogin();
-      } catch (err) {
-        account.recordError(err);
-        res.writeHead(500).end(`Login failed: ${err instanceof Error ? err.message : err}`);
-      } finally {
-        closeLoginServer();
-      }
+  let listener: LoopbackListener;
+  try {
+    listener = await startLoopback({ path: CALLBACK_PATH, state, port: PORT });
+  } catch (err) {
+    throw (err as NodeJS.ErrnoException).code === 'EADDRINUSE'
+      ? new Error(`Port ${PORT} is busy - is \`codex login\` running somewhere else?`)
+      : err;
+  }
+  pending = listener;
+
+  listener.code
+    .then((code) => exchangeCode(code, verifier))
+    .then(() => account.notifyLogin())
+    .catch((err) => {
+      if (!(err instanceof LoginCancelledError)) account.recordError(err);
+    })
+    .finally(() => {
+      if (pending === listener) pending = null;
     });
-    server.on('error', (err: NodeJS.ErrnoException) => {
-      closeLoginServer();
-      reject(
-        err.code === 'EADDRINUSE'
-          ? new Error('Port 1455 is busy — is `codex login` running somewhere else?')
-          : err,
-      );
-    });
-    server.listen(PORT, '127.0.0.1', () => {
-      openAuthWindow(url, 'Sign in to ChatGPT');
-      resolve(url);
-    });
-    setTimeout(closeLoginServer, 10 * 60_000); // abandon after 10 minutes
-  });
+
+  await shell.openExternal(url);
+  return url;
 }
 
 /** The ~/.codex/auth.json body the Codex CLI reads (schema verified). */

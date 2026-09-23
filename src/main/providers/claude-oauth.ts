@@ -1,20 +1,23 @@
 /**
  * Claude account OAuth — the provider-specific half.
  *
- * Drives the same Authorization Code + PKCE flow `claude /login` performs,
- * from inside Puck: open the authorize page in the app's sign-in window,
- * intercept the callback redirect, exchange the code for tokens. Everything
- * generic (storage, refresh-before-use, container-credential adoption and
- * freshness) lives in the shared account (oauth.ts).
+ * Drives the same Authorization Code + PKCE flow `claude /login` performs:
+ * open the authorize page in the system browser, receive the redirect on a
+ * loopback listener (http://localhost:<port>/callback - the callback shape
+ * Claude Code registers for its public client, port chosen at bind time),
+ * exchange the code for tokens. Everything generic (storage,
+ * refresh-before-use, container-credential adoption and freshness) lives in
+ * the shared account (oauth.ts); the listener lives in loopback.ts.
  */
 
-import { closeAuthWindow, openAuthWindow } from '../authwindow';
+import { shell } from 'electron';
+import { LoginCancelledError, startLoopback, type LoopbackListener } from './loopback';
 import { createOAuthAccount, pkce, randomState } from './oauth';
 
 const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'; // Claude Code's public OAuth client
 const AUTHORIZE_URL = 'https://claude.ai/oauth/authorize';
 const TOKEN_URL = 'https://console.anthropic.com/v1/oauth/token';
-const REDIRECT_URI = 'https://console.anthropic.com/oauth/code/callback';
+const CALLBACK_PATH = '/callback';
 const SCOPE = 'org:create_api_key user:profile user:inference';
 
 export interface StoredTokens {
@@ -70,22 +73,36 @@ export const account = createOAuthAccount<StoredTokens>({
   },
 });
 
-let pending: { verifier: string; state: string } | null = null;
+let pending: LoopbackListener | null = null;
+
+/** True while a login waits for the browser to hit the loopback callback. */
+export function loginPending(): boolean {
+  return pending !== null;
+}
+
+/** Abort a login in progress (Cancel button, logout, quit). No-op otherwise. */
+export function cancelLogin(): void {
+  pending?.cancel();
+  pending = null;
+}
 
 /**
- * Opens the authorize page in a dedicated sign-in window and intercepts the
- * OAuth callback URL, so the login completes with no code pasting. Returns
- * the authorize URL.
+ * Starts the loopback listener, opens the authorize page in the system
+ * browser and resolves with the authorize URL. The login itself completes
+ * asynchronously when the browser is redirected to the listener.
  */
-export function startLogin(): string {
+export async function startLogin(): Promise<string> {
+  cancelLogin(); // a new attempt supersedes any pending one
   const { verifier, challenge } = pkce(32);
   const state = randomState();
-  pending = { verifier, state };
+  const listener = await startLoopback({ path: CALLBACK_PATH, state });
+  pending = listener;
+  const redirectUri = `http://localhost:${listener.port}${CALLBACK_PATH}`;
   const params = new URLSearchParams({
     code: 'true',
     client_id: CLIENT_ID,
     response_type: 'code',
-    redirect_uri: REDIRECT_URI,
+    redirect_uri: redirectUri,
     scope: SCOPE,
     code_challenge: challenge,
     code_challenge_method: 'S256',
@@ -93,36 +110,24 @@ export function startLogin(): string {
   });
   const url = `${AUTHORIZE_URL}?${params.toString()}`;
 
-  const win = openAuthWindow(url, 'Sign in to Claude');
-  let consumed = false; // three navigation hooks can see one callback
-  const intercept = (target: string): void => {
-    if (consumed || !target.startsWith(REDIRECT_URI)) return;
-    try {
-      const cb = new URL(target);
-      const code = cb.searchParams.get('code');
-      const cbState = cb.searchParams.get('state');
-      if (code) {
-        if (cbState !== null && cbState !== state) return; // CSRF check
-        consumed = true;
-        closeAuthWindow();
-        void exchange(code, cbState ?? undefined)
-          .then(() => account.notifyLogin())
-          .catch((err) => account.recordError(err));
-      }
-    } catch {
-      // not a parseable URL — ignore
-    }
-  };
-  win.webContents.on('will-redirect', (_event, target) => intercept(target));
-  win.webContents.on('will-navigate', (_event, target) => intercept(target));
-  win.webContents.on('did-navigate', (_event, target) => intercept(target));
+  listener.code
+    .then((code) => exchange(code, { redirectUri, verifier, state }))
+    .then(() => account.notifyLogin())
+    .catch((err) => {
+      if (!(err instanceof LoginCancelledError)) account.recordError(err);
+    })
+    .finally(() => {
+      if (pending === listener) pending = null;
+    });
+
+  await shell.openExternal(url);
   return url;
 }
 
-async function exchange(code: string, state?: string): Promise<void> {
-  if (!pending) throw new Error('No login in progress.');
-  const attempt = pending;
-  pending = null; // a code is single-use — never leave a half-open login
+async function exchange(
+  code: string,
+  attempt: { redirectUri: string; verifier: string; state: string },
+): Promise<void> {
   const res = await fetch(TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -130,9 +135,9 @@ async function exchange(code: string, state?: string): Promise<void> {
       grant_type: 'authorization_code',
       client_id: CLIENT_ID,
       code,
-      redirect_uri: REDIRECT_URI,
+      redirect_uri: attempt.redirectUri,
       code_verifier: attempt.verifier,
-      state: state ?? attempt.state,
+      state: attempt.state,
     }),
   });
   if (!res.ok) {

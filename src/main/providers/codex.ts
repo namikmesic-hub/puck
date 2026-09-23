@@ -188,9 +188,10 @@ export const codexProvider: Provider = {
 
   auth: providerAuth(oauth.account, {
     start: oauth.startLogin,
+    cancel: oauth.cancelLogin,
+    pending: oauth.loginPending,
     signInHint: 'Not connected — sign in with your ChatGPT account',
     connectedDetail: (tokens) => `Connected — last refreshed ${tokens.lastRefresh.slice(0, 16)}`,
-    beforeLogout: oauth.closeLoginServer,
   }),
 
   container: {

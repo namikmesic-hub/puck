@@ -100,6 +100,9 @@ const ipcHandlers: Record<(typeof CHANNELS)[keyof typeof CHANNELS], IpcHandler> 
     const url = await providerRegistry.requireProvider(requireId(id, 'provider')).auth.start();
     return { url };
   },
+  [CHANNELS.providerAuthCancel]: (_event, id) => {
+    providerRegistry.requireProvider(requireId(id, 'provider')).auth.cancel();
+  },
   [CHANNELS.providerAuthLogout]: (_event, id) => {
     providerRegistry.requireProvider(requireId(id, 'provider')).auth.logout();
   },

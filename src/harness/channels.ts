@@ -15,6 +15,7 @@ export const CHANNELS = {
   providers: 'provider:list',
   openExternal: 'shell:open-external',
   providerAuthStart: 'provider:auth-start',
+  providerAuthCancel: 'provider:auth-cancel',
   providerAuthLogout: 'provider:auth-logout',
 
   agentList: 'agent:list',
