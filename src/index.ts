@@ -13,6 +13,8 @@ import * as providerRegistry from './main/providers';
 import * as environments from './main/environments';
 import * as runner from './main/runner';
 import * as sessionRegistry from './main/session-registry';
+import { flushWrites } from './main/jsonstore';
+import { flushRenderers, installQuitDrain } from './main/shutdown';
 import {
   agentConfigFrom,
   askAnswersFrom,
@@ -31,8 +33,10 @@ process.on('unhandledRejection', (reason) => {
 
 // Composition: the runner bridge speaks NDJSON over whatever exec transport
 // it is handed; environments supplies the docker adapter. A destroyed
-// container invalidates its resume ids, and a completed login pushes
-// credentials into every running environment.
+// container invalidates its resume ids, a completed login pushes
+// credentials into every running environment, and a logout removes them
+// again (the container side of the logout fence; its failure surfaces to
+// the Disconnect button through the IPC rejection).
 runner.useExecSpawner(environments.runnerExecSpawner);
 environments.onEnvReset(sessionRegistry.forgetEnvironment);
 providerRegistry.setOnLogin(() =>
@@ -40,6 +44,7 @@ providerRegistry.setOnLogin(() =>
     console.error('Credential push into running environments failed:', err);
   }),
 );
+providerRegistry.setOnLogout((provider) => environments.purgeCredentials(provider));
 
 // Injected by Forge's webpack plugin: dev-server vs packaged bundle URLs.
 declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
@@ -103,9 +108,8 @@ const ipcHandlers: Record<(typeof CHANNELS)[keyof typeof CHANNELS], IpcHandler> 
   [CHANNELS.providerAuthCancel]: (_event, id) => {
     providerRegistry.requireProvider(requireId(id, 'provider')).auth.cancel();
   },
-  [CHANNELS.providerAuthLogout]: (_event, id) => {
-    providerRegistry.requireProvider(requireId(id, 'provider')).auth.logout();
-  },
+  [CHANNELS.providerAuthLogout]: (_event, id) =>
+    providerRegistry.requireProvider(requireId(id, 'provider')).auth.logout(),
 
   [CHANNELS.agentList]: () => agents.list(),
   [CHANNELS.agentCreate]: (_event, cfg) => agents.create(agentConfigFrom(cfg)),
@@ -197,6 +201,11 @@ app.on('ready', () => {
   }
   createWindow();
 });
+
+// Quit is a drain: the first request is held while the renderer flushes its
+// debounced saves and the composer draft and every queued store write
+// settles; then it proceeds (bounded, so a stuck disk cannot wedge quit).
+installQuitDrain(app, { flushRenderers, drainStores: flushWrites, timeoutMs: 5_000 });
 
 // Kill runner docker-exec children on quit — no orphaned processes.
 app.on('before-quit', () => runner.detachAll());

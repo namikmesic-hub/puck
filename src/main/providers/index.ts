@@ -49,3 +49,12 @@ export function providerInfos(): ProviderInfo[] {
 export function setOnLogin(cb: () => void): void {
   for (const provider of providers) provider.auth.setOnLogin(cb);
 }
+
+/**
+ * Fan a logout hook out: it runs after a provider's local fence (pending
+ * login aborted, tokens cleared) so the app can remove the credentials it
+ * mirrored into containers. Its rejection surfaces to the caller of logout.
+ */
+export function setOnLogout(cb: (provider: Provider) => Promise<void>): void {
+  for (const provider of providers) provider.auth.setOnLogout(() => cb(provider));
+}

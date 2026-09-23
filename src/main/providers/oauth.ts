@@ -3,11 +3,11 @@
  *
  * `createOAuthAccount` owns everything that is identical across providers:
  * the encrypted token store, login-callback fan-in, refresh-before-use,
- * adopting fresher container-side credentials, and the freshness comparison
- * used when mirroring credential files into containers. The per-provider
- * modules keep only what genuinely differs: the authorize URL, the loopback
- * callback shape (port and path), the token exchange, and the
- * credential-file serialization.
+ * adopting fresher container-side credentials, the freshness comparison
+ * used when mirroring credential files into containers - and the logout
+ * fence that makes a sign-out final. The per-provider modules keep only what
+ * genuinely differs: the authorize URL, the loopback callback shape (port and
+ * path), the token exchange, and the credential-file serialization.
  */
 
 import * as crypto from 'node:crypto';
@@ -56,6 +56,18 @@ function tokenStore<T>(storeName: string): {
   };
 }
 
+/**
+ * A point in an account's logout history. Async work that ends in a token
+ * write - a login exchange, a refresh, a credential copy into a container -
+ * takes a fence when it starts and checks it before writing: `current()` is
+ * false once a logout happened after the fence was taken, and the write is
+ * dropped. This is what makes logout final: nothing already in flight can
+ * sign the account back in.
+ */
+export interface LogoutFence {
+  current(): boolean;
+}
+
 export interface OAuthAccountConfig<T> {
   /** Encrypted store file name, e.g. 'claude-oauth.bin'. */
   storeName: string;
@@ -71,15 +83,35 @@ export interface OAuthAccountConfig<T> {
 
 export interface OAuthAccount<T> {
   load(): T | null;
-  save(tokens: T): void;
+  /**
+   * Persist tokens. With a fence, the write is refused (returns false) when a
+   * logout happened after the fence was taken - every async path that ends
+   * in a save passes the fence it took at its start.
+   */
+  save(tokens: T, fence?: LogoutFence): boolean;
+  fence(): LogoutFence;
   setOnLogin(cb: () => void): void;
   /** Called by the transport once an exchange lands; fans out to the app. */
   notifyLogin(): void;
-  logout(): void;
-  /** Valid tokens, refreshed when stale. A failed refresh keeps the old
-   *  tokens (offline starts must not break) and records the error. */
+  /**
+   * Runs after the local fence on logout (tokens cleared, fences tripped);
+   * the app removes the credentials it mirrored into containers here. A
+   * failure propagates out of logout() - the local sign-out has already held.
+   */
+  setOnLogout(cb: () => Promise<void> | void): void;
+  /** Sign out: trip every fence, clear the stored tokens, run the logout hook. */
+  logout(): Promise<void>;
+  /**
+   * Valid tokens, refreshed when stale. A failed refresh keeps the old
+   * tokens (offline starts must not break) and records the error. A logout
+   * during the refresh wins: the result is dropped and null is returned.
+   */
   getFreshTokens(): Promise<T | null>;
-  /** Adopt container-side credentials when fresher (CLIs rotate tokens). */
+  /**
+   * Adopt container-side credentials when strictly fresher than the ones we
+   * hold (CLIs rotate tokens). A signed-out account adopts nothing - a
+   * container copy must never undo a logout.
+   */
   adoptIfNewer(containerJson: string): void;
   /** True when our tokens should overwrite the container's copy. */
   supersedes(containerJson: string): boolean;
@@ -91,13 +123,22 @@ export interface OAuthAccount<T> {
 export function createOAuthAccount<T>(cfg: OAuthAccountConfig<T>): OAuthAccount<T> {
   const store = tokenStore<T>(cfg.storeName);
   let onLoginCb: (() => void) | null = null;
+  let onLogoutCb: (() => Promise<void> | void) | null = null;
   let lastError: string | null = null;
+  /** Advances on every logout; a fence remembers the value it was taken at. */
+  let epoch = 0;
 
-  return {
+  const account: OAuthAccount<T> = {
     load: store.load,
-    save(tokens: T): void {
+    fence(): LogoutFence {
+      const at = epoch;
+      return { current: () => at === epoch };
+    },
+    save(tokens: T, fence?: LogoutFence): boolean {
+      if (fence && !fence.current()) return false;
       lastError = null;
       store.save(tokens);
+      return true;
     },
     setOnLogin(cb) {
       onLoginCb = cb;
@@ -105,37 +146,44 @@ export function createOAuthAccount<T>(cfg: OAuthAccountConfig<T>): OAuthAccount<
     notifyLogin() {
       onLoginCb?.();
     },
-    logout() {
+    setOnLogout(cb) {
+      onLogoutCb = cb;
+    },
+    async logout(): Promise<void> {
+      // The local fence first, synchronously: from here on no exchange,
+      // refresh or adoption can write, and nothing can re-inject into a
+      // container while the hook below cleans up.
+      epoch += 1;
       lastError = null;
       store.clear();
+      await onLogoutCb?.();
     },
     async getFreshTokens(): Promise<T | null> {
       const tokens = store.load();
       if (!tokens) return null;
       if (!cfg.needsRefresh(tokens)) return tokens;
+      const fence = account.fence();
       try {
         const refreshed = await cfg.refresh(tokens);
-        if (refreshed) {
-          store.save(refreshed);
-          return refreshed;
-        }
+        if (refreshed && account.save(refreshed, fence)) return refreshed;
       } catch (err) {
-        this.recordError(err);
+        if (fence.current()) account.recordError(err);
       }
-      return tokens;
+      return fence.current() ? tokens : null;
     },
     adoptIfNewer(containerJson: string): void {
       const candidate = cfg.parseContainerFile(parseJson(containerJson));
       if (!candidate) return;
       const current = store.load();
-      if (current && cfg.freshnessOf(current) >= cfg.freshnessOf(candidate)) return;
+      if (!current) return; // signed out (or never signed in): not ours to adopt
+      if (cfg.freshnessOf(current) >= cfg.freshnessOf(candidate)) return;
       store.save(candidate);
     },
     supersedes(containerJson: string): boolean {
       const ours = store.load();
       if (!ours) return false;
       const theirs = cfg.parseContainerFile(parseJson(containerJson));
-      if (!theirs) return true; // unparseable container copy — overwrite
+      if (!theirs) return true; // unparseable container copy - overwrite
       return cfg.freshnessOf(ours) > cfg.freshnessOf(theirs);
     },
     lastError: () => lastError,
@@ -144,13 +192,14 @@ export function createOAuthAccount<T>(cfg: OAuthAccountConfig<T>): OAuthAccount<
       console.error(`${cfg.storeName} auth error:`, err);
     },
   };
+  return account;
 }
 
 /**
  * The Provider `auth` surface over a shared account: status text, login
- * start/cancel, logout (which also aborts a pending login and clears only
- * Puck's own stored tokens - the browser session is the user's). Providers
- * supply only what differs.
+ * start/cancel, logout (aborts a pending login, then runs the account's
+ * fence and logout hook; only Puck's own stored tokens are cleared - the
+ * browser session is the user's). Providers supply only what differs.
  */
 export function providerAuth<T>(
   account: OAuthAccount<T>,
@@ -181,11 +230,12 @@ export function providerAuth<T>(
     },
     start: async () => cfg.start(),
     cancel: () => cfg.cancel(),
-    logout: () => {
-      cfg.cancel();
-      account.logout();
+    logout: async () => {
+      cfg.cancel(); // a callback that lands later finds no listener
+      await account.logout();
     },
     setOnLogin: (cb) => account.setOnLogin(cb),
+    setOnLogout: (cb) => account.setOnLogout(cb),
   };
 }
 
@@ -198,10 +248,17 @@ export function providerCredential<T>(
   return {
     hostPath: cfg.hostPath,
     containerPath: cfg.containerPath,
+    signedIn: () => account.load() !== null,
     fresh: async () => {
+      // Taken before the refresh so a logout during it trips the snapshot too.
+      const fence = account.fence();
       const tokens = await account.getFreshTokens();
       if (!tokens) return null;
-      return { content: cfg.serialize(tokens), supersedes: account.supersedes };
+      return {
+        content: cfg.serialize(tokens),
+        supersedes: account.supersedes,
+        current: fence.current,
+      };
     },
     adoptIfNewer: account.adoptIfNewer,
   };

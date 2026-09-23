@@ -827,7 +827,7 @@ async function submit(text: string): Promise<void> {
   session.log.push({ kind: 'user', text: trimmed, author: 'user', ts: Date.now() });
   const record: ConversationEntry = { kind: 'turn', ts: Date.now(), events: [] };
   session.log.push(record);
-  persistConversation(session); // the user's message is durable immediately
+  void persistConversation(session); // the user's message is durable immediately
 
   const turn = addAssistantTurn(session, turnId);
   turn.setThinking(true, 'Contacting the harness…'); // no dead air before the first event
@@ -884,7 +884,7 @@ async function submit(text: string): Promise<void> {
     syncComposer();
     renderRecents();
     // Conversations are forever — persist the completed turn.
-    persistConversation(session);
+    void persistConversation(session);
   }
 }
 
@@ -918,7 +918,17 @@ function autosize(): void {
   prompt.style.height = 'auto';
   prompt.style.height = `${Math.min(prompt.scrollHeight, 160)}px`;
 }
-prompt.addEventListener('input', autosize);
+prompt.addEventListener('input', () => {
+  autosize();
+  // An idle draft belongs to its conversation: save it after the typing
+  // pause so it survives quit and restart (the quit flush covers the rest).
+  if (current.agentId) schedulePersist(current);
+});
+
+// Quit (main asks) and window close (best effort) drain the renderer:
+// pending debounced saves plus the mounted conversation's composer draft.
+bridge?.onFlush(() => store.flushPending());
+window.addEventListener('pagehide', () => void store.flushPending());
 
 addAgentBtn.addEventListener('click', () => {
   nav({ view: 'settings', section: 'agents' });

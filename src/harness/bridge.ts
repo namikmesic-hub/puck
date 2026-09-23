@@ -192,6 +192,11 @@ export interface PuckBridge {
    */
   answerAsk(turnId: string, askId: string, answers: Record<string, string> | null): Promise<void>;
   onEvent(cb: (payload: BridgeEventPayload) => void): void;
+  /**
+   * Main is about to quit: persist everything still pending (debounced saves,
+   * the composer draft) and resolve. Quit waits for the promise (bounded).
+   */
+  onFlush(cb: () => Promise<void>): void;
 }
 
 declare global {

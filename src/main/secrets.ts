@@ -1,30 +1,65 @@
 /**
- * Encrypted-at-rest secret storage for provider tokens (main process).
- * Uses Electron safeStorage (OS keychain-backed) with a plaintext fallback
- * only when the OS facility is unavailable.
+ * Encrypted-at-rest secret storage for provider tokens and environment
+ * secrets (main process). Electron safeStorage (OS keychain-backed) is the
+ * ONLY backend: when it is unavailable, saving refuses with a clear error
+ * instead of falling back to plaintext, and an existing file that cannot be
+ * decrypted reads as absent. The Settings copy in index.html describes this
+ * behavior - keep the two in sync.
  */
 
 import { app, safeStorage } from 'electron';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+/** The OS secure store cannot encrypt right now; nothing was written. */
+export class SecureStorageUnavailableError extends Error {
+  constructor() {
+    super(
+      `The OS secure store is unavailable (Electron safeStorage reports the ${backendName()} ` +
+        'cannot encrypt), so Puck refused to save the secret. Puck never stores secrets in ' +
+        'plaintext. Unlock the login keychain and try again.',
+    );
+    this.name = 'SecureStorageUnavailableError';
+  }
+}
+
+function backendName(): string {
+  if (process.platform === 'darwin') return 'macOS Keychain';
+  if (process.platform === 'linux' && typeof safeStorage.getSelectedStorageBackend === 'function') {
+    return `${safeStorage.getSelectedStorageBackend()} backend`;
+  }
+  return 'OS keychain';
+}
+
 function fileFor(name: string): string {
   return path.join(app.getPath('userData'), name);
 }
 
+/**
+ * Store `json` encrypted, owner-readable only. Throws
+ * SecureStorageUnavailableError - and writes nothing - when the OS store
+ * cannot encrypt. Callers surface the message as-is (auth status, editor).
+ */
 export function saveSecret(name: string, json: string): void {
-  const data = safeStorage.isEncryptionAvailable()
-    ? safeStorage.encryptString(json)
-    : Buffer.from(json, 'utf8');
-  fs.writeFileSync(fileFor(name), data, { mode: 0o600 });
+  if (!safeStorage.isEncryptionAvailable()) throw new SecureStorageUnavailableError();
+  fs.writeFileSync(fileFor(name), safeStorage.encryptString(json), { mode: 0o600 });
 }
 
+/**
+ * The decrypted secret, or null when there is none - or when it cannot be
+ * decrypted: the store is unavailable, or the file is one this build does not
+ * accept (a plaintext file from the removed fallback is never read back).
+ */
 export function loadSecret(name: string): string | null {
+  let raw: Buffer;
   try {
-    const raw = fs.readFileSync(fileFor(name));
-    return safeStorage.isEncryptionAvailable()
-      ? safeStorage.decryptString(raw)
-      : raw.toString('utf8');
+    raw = fs.readFileSync(fileFor(name));
+  } catch {
+    return null;
+  }
+  if (!safeStorage.isEncryptionAvailable()) return null;
+  try {
+    return safeStorage.decryptString(raw);
   } catch {
     return null;
   }
