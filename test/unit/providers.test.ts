@@ -57,8 +57,11 @@ describe('provider registry', () => {
   it('derives the container bootstrap contract both providers rely on', () => {
     const clis = providers.flatMap((p) => p.container.cliPackages);
     const sdks = providers.flatMap((p) => p.container.sdkPackages);
-    expect(clis).toEqual(['@anthropic-ai/claude-code', '@openai/codex']);
-    expect(sdks).toEqual(['@anthropic-ai/claude-agent-sdk', '@openai/codex-sdk']);
+    expect(clis.map((p) => p.name)).toEqual(['@anthropic-ai/claude-code', '@openai/codex']);
+    expect(sdks.map((p) => p.name)).toEqual(['@anthropic-ai/claude-agent-sdk', '@openai/codex-sdk']);
+    // Every container package is pinned to an exact version (no ranges):
+    // provisioning verifies the installed version against it after install.
+    for (const pkg of [...clis, ...sdks]) expect(pkg.version).toMatch(/^\d+\.\d+\.\d+$/);
     for (const p of providers) {
       expect(p.container.credential.containerPath.startsWith('/root/.')).toBe(true);
     }

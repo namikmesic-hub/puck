@@ -10,11 +10,55 @@ import type { HarnessEvent } from './types';
 import type { ProviderOption } from './options';
 
 export interface HarnessStatus {
-  /** True when an environment is selected and its container is running. */
+  /** True when an agent is selected and the active environment is `ready`. */
   connected: boolean;
   /** The active agent (named provider configuration), if any. */
   agent: { id: string; name: string; provider: string; model: string } | null;
-  environment: { id: string; name: string; status: string } | null;
+  /** The active environment with its Puck-owned lifecycle state, if any. */
+  environment: ({ id: string; name: string } & EnvLifecycle) | null;
+}
+
+/**
+ * Puck-owned environment lifecycle state. Docker liveness alone is not
+ * readiness: a running container may still be installing (runner not yet
+ * deployed) or already stopping (Docker keeps State.Running true during the
+ * stop grace period). `ready` is set only after bootstrap, credential and
+ * secret injection, runner deployment, and a successful runner handshake.
+ */
+export type EnvStatus = 'stopped' | 'starting' | 'ready' | 'stopping' | 'failed';
+
+/** Start / stop stages, in the order a start runs them. */
+export type EnvStage =
+  | 'checking-image'
+  | 'pulling-image'
+  | 'building-image'
+  | 'starting-container'
+  | 'installing-clis'
+  | 'installing-sdks'
+  | 'verifying-packages'
+  | 'deploying-runner'
+  | 'injecting-credentials'
+  | 'probing-runner'
+  | 'stopping-container'
+  | 'removing-container';
+
+export interface EnvLifecycle {
+  status: EnvStatus;
+  /** Current stage while starting/stopping; the failing stage after a failure; else null. */
+  stage: EnvStage | null;
+  /** Last bounded, sanitized line of docker / npm output for the stage (never credentials). */
+  detail: string;
+  /** Epoch ms when the current (or last) operation began; null when never operated. */
+  startedAt: number | null;
+  /** Epoch ms when the last operation ended (ready, stopped, or failed); null while running. */
+  endedAt: number | null;
+  /** Classified failure message; non-null only while `status` is `failed`. */
+  error: string | null;
+}
+
+/** Pushed main → renderer on every lifecycle change (see `PuckBridge.onEnvEvent`). */
+export interface EnvLifecycleEvent extends EnvLifecycle {
+  envId: string;
 }
 
 /** A named, reusable provider configuration. */
@@ -61,9 +105,8 @@ export interface EnvironmentConfig {
   envVars: Record<string, string>;
 }
 
-export interface EnvironmentInfo extends EnvironmentConfig {
+export interface EnvironmentInfo extends EnvironmentConfig, EnvLifecycle {
   id: string;
-  status: 'running' | 'stopped';
   active: boolean;
   /** Names of secrets (values never leave the main process). */
   secretKeys: string[];
@@ -174,6 +217,8 @@ export interface PuckBridge {
   envSecretSet(id: string, key: string, value: string): Promise<EnvironmentInfo[]>;
   envSecretDelete(id: string, key: string): Promise<EnvironmentInfo[]>;
   envSelect(id: string): Promise<HarnessStatus>;
+  /** Streamed lifecycle progress (stage, output line, failure) for every environment. */
+  onEnvEvent(cb: (payload: EnvLifecycleEvent) => void): void;
 
   /** Persist / restore the per-agent conversation transcripts. */
   convoSave(agentId: string, data: ConversationData): Promise<void>;

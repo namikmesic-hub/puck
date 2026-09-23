@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { BridgeEventPayload, EnvironmentConfig, PuckBridge } from './harness/bridge';
-import { CHANNELS, EVENT_CHANNEL, FLUSH_CHANNEL, FLUSHED_CHANNEL } from './harness/channels';
+import type { BridgeEventPayload, EnvironmentConfig, EnvLifecycleEvent, PuckBridge } from './harness/bridge';
+import { CHANNELS, ENV_EVENT_CHANNEL, EVENT_CHANNEL, FLUSH_CHANNEL, FLUSHED_CHANNEL } from './harness/channels';
 
 const bridge: PuckBridge = {
   status: () => ipcRenderer.invoke(CHANNELS.status),
@@ -26,6 +26,9 @@ const bridge: PuckBridge = {
   envSecretSet: (id, key, value) => ipcRenderer.invoke(CHANNELS.envSecretSet, { id, key, value }),
   envSecretDelete: (id, key) => ipcRenderer.invoke(CHANNELS.envSecretDelete, { id, key }),
   envSelect: (id) => ipcRenderer.invoke(CHANNELS.envSelect, id),
+  onEnvEvent: (cb) => {
+    ipcRenderer.on(ENV_EVENT_CHANNEL, (_event, payload: EnvLifecycleEvent) => cb(payload));
+  },
 
   convoSave: (agentId, data) => ipcRenderer.invoke(CHANNELS.convoSave, { agentId, data }),
   convoLoad: () => ipcRenderer.invoke(CHANNELS.convoLoad),

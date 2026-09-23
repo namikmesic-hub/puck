@@ -42,12 +42,14 @@ export const CHANNELS = {
   startTurn: 'harness:start-turn',
   interrupt: 'harness:interrupt',
   answerAsk: 'harness:answer-ask',
-} as const satisfies Record<Exclude<keyof PuckBridge, 'onEvent' | 'onFlush'>, string>;
+} as const satisfies Record<Exclude<keyof PuckBridge, 'onEvent' | 'onFlush' | 'onEnvEvent'>, string>;
 
 /* Push channels (main → renderer) live outside the invoke table. */
 
 /** Harness events, tagged with their turnId. */
 export const EVENT_CHANNEL = 'harness:event';
+/** Environment lifecycle progress (`EnvLifecycleEvent`). */
+export const ENV_EVENT_CHANNEL = 'env:lifecycle';
 /** Main is about to quit: persist everything pending (payload: a token). */
 export const FLUSH_CHANNEL = 'app:flush';
 /** The renderer's one-way reply once its saves settled (payload: that token). */

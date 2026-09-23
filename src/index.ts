@@ -24,7 +24,8 @@ import {
   requireSecretKey,
   requireString,
 } from './main/ipcguard';
-import { CHANNELS, EVENT_CHANNEL } from './harness/channels';
+import { CHANNELS, ENV_EVENT_CHANNEL, EVENT_CHANNEL } from './harness/channels';
+import { dockerLocation } from './main/docker-client';
 
 // A rejected fire-and-forget promise must never take the process down.
 process.on('unhandledRejection', (reason) => {
@@ -32,13 +33,20 @@ process.on('unhandledRejection', (reason) => {
 });
 
 // Composition: the runner bridge speaks NDJSON over whatever exec transport
-// it is handed; environments supplies the docker adapter. A destroyed
-// container invalidates its resume ids, a completed login pushes
-// credentials into every running environment, and a logout removes them
-// again (the container side of the logout fence; its failure surfaces to
-// the Disconnect button through the IPC rejection).
+// it is handed; environments supplies the docker adapter and explains a
+// runner death caused by its own lifecycle ops. A destroyed container
+// invalidates its resume ids, a completed login pushes credentials into
+// every running environment, a logout removes them again (the container
+// side of the logout fence; its failure surfaces to the Disconnect button
+// through the IPC rejection), and every lifecycle change streams to the UI.
 runner.useExecSpawner(environments.runnerExecSpawner);
+runner.useDisconnectExplainer(environments.explainDisconnect);
 environments.onEnvReset(sessionRegistry.forgetEnvironment);
+environments.onLifecycle((payload) => {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send(ENV_EVENT_CHANNEL, payload);
+  }
+});
 providerRegistry.setOnLogin(() =>
   environments.injectCredentialsIntoRunning().catch((err) => {
     console.error('Credential push into running environments failed:', err);
@@ -200,6 +208,9 @@ app.on('ready', () => {
     });
   }
   createWindow();
+  // Locate the docker CLI up front (Finder launches do not inherit the shell
+  // PATH); a miss is reported by the first environment operation that needs it.
+  void dockerLocation().catch((err) => console.error('Docker discovery:', err));
 });
 
 // Quit is a drain: the first request is held while the renderer flushes its

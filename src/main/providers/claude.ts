@@ -197,8 +197,9 @@ export const claudeProvider: Provider = {
 
   container: {
     cliBin: 'claude',
-    cliPackages: ['@anthropic-ai/claude-code'],
-    sdkPackages: ['@anthropic-ai/claude-agent-sdk'],
+    // Pinned: verified by provisioning after install (see provisioning.ts).
+    cliPackages: [{ name: '@anthropic-ai/claude-code', version: '2.1.280' }],
+    sdkPackages: [{ name: '@anthropic-ai/claude-agent-sdk', version: '0.3.280' }],
     forwardedEnvKeys: ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'],
     // Claude Code refuses --dangerously-skip-permissions as root unless it
     // can tell it's sandboxed; the container is exactly that sandbox.
