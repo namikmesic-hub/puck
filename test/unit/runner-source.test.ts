@@ -53,6 +53,18 @@ describe('container runner source', () => {
     expect(source).not.toContain('System instructions:');
   });
 
+  it('runs the stdio dispatch only as the main script (unit tests load it as a module)', () => {
+    expect(source).toContain('require.main === module');
+    expect(source).toContain('module.exports = {');
+  });
+
+  it('maps Codex collab items to sub-agent cards, not raw cards', () => {
+    expect(source).toContain("'collab_tool_call'");
+    for (const tool of ['spawn_agent', 'send_input', 'wait', 'close_agent']) {
+      expect(source, `runner.js does not know collab tool ${tool}`).toContain(`'${tool}'`);
+    }
+  });
+
   it('fails loudly on unknown providers instead of falling back', () => {
     expect(source).not.toContain("|| PROVIDERS['claude-code']");
   });

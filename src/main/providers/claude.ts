@@ -181,6 +181,7 @@ export const claudeProvider: Provider = {
   capabilities: {
     supportsAsk: true,
     subAgents: true,
+    subAgentTranscript: true,
     streamsTokens: true,
     reportsCost: true,
   },

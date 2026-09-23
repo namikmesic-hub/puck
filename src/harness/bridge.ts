@@ -82,6 +82,12 @@ export interface ProviderCapabilities {
   supportsAsk: boolean;
   /** Sub-agent chats (Task/Agent tools, parentId-tagged events). */
   subAgents: boolean;
+  /**
+   * Sub-agent chats carry the child's own transcript (its text and tool
+   * calls). False = lifecycle only: the spawn prompt, follow-up input, and
+   * the final status (Codex over `codex exec` reports nothing else).
+   */
+  subAgentTranscript: boolean;
   /** Token-level text deltas (vs whole-message text). */
   streamsTokens: boolean;
   /** costUsd in turn stats. */

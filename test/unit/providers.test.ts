@@ -31,6 +31,18 @@ describe('provider registry', () => {
     }
   });
 
+  it('declares sub-agent support and whether the child transcript arrives', () => {
+    for (const info of providerInfos()) {
+      expect(typeof info.capabilities.subAgents).toBe('boolean');
+      expect(typeof info.capabilities.subAgentTranscript).toBe('boolean');
+      // A transcript needs sub-agent chats to land in.
+      if (info.capabilities.subAgentTranscript) expect(info.capabilities.subAgents).toBe(true);
+    }
+    expect(providerById('claude-code')?.capabilities).toMatchObject({ subAgents: true, subAgentTranscript: true });
+    // codex exec reports collab tool calls (cards), never the child thread.
+    expect(providerById('codex')?.capabilities).toMatchObject({ subAgents: true, subAgentTranscript: false });
+  });
+
   it('codex advertises the current reasoning levels', () => {
     expect(providerById('codex')?.thinkingLevels).toContain('xhigh');
   });

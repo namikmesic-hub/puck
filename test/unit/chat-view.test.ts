@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
-import type { ConversationData } from '../../src/harness/bridge';
+import type { ConversationData, ProviderCapabilities } from '../../src/harness/bridge';
 import { initChatView, type ChatView, type ChatViewContext } from '../../src/renderer/chat-view';
 import { createSessionStore, type Session, type SessionStore } from '../../src/renderer/session-store';
 import fixture from '../fixtures/convo-v1.json';
@@ -20,7 +20,7 @@ interface Harness {
   session: Session;
 }
 
-function makeHarness(): Harness {
+function makeHarness(capabilities?: ProviderCapabilities): Harness {
   const store = createSessionStore({
     interrupt: () => undefined,
     save: async () => undefined,
@@ -42,6 +42,7 @@ function makeHarness(): Harness {
     isCurrent: () => false,
     openSession,
     spawnChild: store.spawnChild,
+    capabilities: () => capabilities,
     pruneChildren: store.dropChildren,
     overlay: {
       body: document.createElement('div'),
@@ -132,6 +133,55 @@ describe('sub-agent spawn and settle', () => {
     expect(child.unread).toBe('done'); // isCurrent() is false in this harness
     await nextFrame(); // the landed report streams through the markdown committer
     expect(child.thread.textContent).toContain('All good.');
+  });
+});
+
+const FULL_TRANSCRIPT: ProviderCapabilities = {
+  supportsAsk: true,
+  subAgents: true,
+  streamsTokens: true,
+  reportsCost: true,
+  subAgentTranscript: true,
+};
+
+describe('sub-agent cards follow the provider capabilities', () => {
+  it('notes lifecycle-only children and links to their status', async () => {
+    const { view, store, session } = makeHarness({ ...FULL_TRANSCRIPT, subAgentTranscript: false });
+    const turn = view.addAssistantTurn(session, 't1', T0);
+    turn.startTool('item_0', 'Agent', 'draft a plan', 'draft a plan', undefined, true, T0);
+
+    const child = store.sessions[0];
+    expect(child.title).toBe('draft a plan');
+    const note = child.thread.querySelector('.thread-note');
+    expect(note?.textContent).toContain('Lifecycle only');
+    expect(note?.textContent).toContain('final status');
+    // The note follows the prompt row (the child's own turn comes after it).
+    expect(note?.previousElementSibling?.classList.contains('msg-row')).toBe(true);
+    expect(child.thread.querySelectorAll('.msg-row')).toHaveLength(2);
+    expect(session.thread.querySelector('.agent-link-open')?.textContent).toBe('Open status →');
+
+    // Lifecycle text streams into the child chat; the terminal wait settles the card.
+    turn.appendText('Started as Codex thread `thread-child` (running).\n\n', 'item_0');
+    turn.endTool('item_0', true, 'completed', T0 + 5000);
+    await nextFrame();
+    expect(child.thread.textContent).toContain('thread-child');
+    expect(child.running).toBe(false);
+    expect(session.thread.querySelector('.agent-link .tool-status')?.classList.contains('ok')).toBe(true);
+  });
+
+  it('keeps the plain chat link when the provider streams the child transcript', () => {
+    const { view, store, session } = makeHarness(FULL_TRANSCRIPT);
+    const turn = view.addAssistantTurn(session, 't1', T0);
+    turn.startTool('task-1', 'Agent', 'Review the diff', 'look closely', undefined, true, T0);
+    expect(store.sessions[0].thread.querySelector('.thread-note')).toBeNull();
+    expect(session.thread.querySelector('.agent-link-open')?.textContent).toBe('Open chat →');
+  });
+
+  it('treats an unknown provider as full-transcript (no note)', () => {
+    const { view, store, session } = makeHarness();
+    const turn = view.addAssistantTurn(session, 't1', T0);
+    turn.startTool('task-1', 'Agent', 'Review the diff', 'look closely', undefined, true, T0);
+    expect(store.sessions[0].thread.querySelector('.thread-note')).toBeNull();
   });
 });
 
